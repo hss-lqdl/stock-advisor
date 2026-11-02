@@ -29,10 +29,19 @@
 - 浏览器 E2E：启动屏断言单独给 90 秒预算（`--boot-wait`）；SW 注册改为轮询 15 秒，避免假阴性。
 
 ### 项目化
-- 新增 `package.json`（npm 脚本）、`.gitignore`、`.editorconfig`
+- 新增 `package.json`（npm 脚本）、`.gitignore`、`.gitattributes`、`.editorconfig`
 - 新增 `docs/`：`FILES.md`（文件清单）、`ARCHITECTURE.md`（架构与契约）、`BACKLOG.md`（路线与技术债）
 - 新增本 `CHANGELOG.md`
 - 清理误建目录 `UserslqdlDownloadsstock_advisor/`、空目录 `web/js/ui/`、运行期产物 `.server_url`
+- 初始化 git 仓库并完成首次提交
+
+### 验收（2026-11-02 实测，上游通畅）
+- 离线 `node tools/selftest.mjs` → **364 项全通过**
+- 联网 `node tools/selftest.mjs --live` → **392 项全通过**，2.8 s。
+  真实数据：股票池 **1292 只**，`剔除创业板(-1)` 已生效，
+  TOP5 为 `002624 完美世界 / 600977 中国电影 / 002027 分众传媒 / 002181 粤传媒 / 601928 凤凰传媒`
+  —— **无一只是 300/301 开头**（排除创业板已在真实数据上验证）
+- 浏览器 `node tools/e2e-browser.mjs --live` → **42 项全通过**，东财接口失败 **0 次**
 
 ---
 
