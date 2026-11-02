@@ -79,7 +79,7 @@ stock_advisor/
 |---|---|---|---|
 | `api.js` | 646 | 东财接口层：分页并发池、重试、多主机轮转、JSONP 兜底、K 线解析与质量校验 | `fetchSnapshot` `fetchBoards` `fetchKlines` `fetchKline` `fetchIndexes` `fetchQuotes` `fetchLimitPool` `fetchServerClock` `parseKlines` `klineQuality` `secidOf` `pool` `withProgress` `ApiError`；常量 `FS_ALL/FS_CONCEPT/FS_INDUSTRY/F_SNAP_*/F_BOARD/F_KLINE` |
 | `store.js` | 444 | IndexedDB 持久层（7 张表：snapshot / klines / boards / boardDaily / plans / positions / meta） | `openDB` `snapshotSaveAll/LoadAll` `klinesSaveMany/GetMany` `klineAppendToday` `boardsSaveAll/LoadAll` `boardDailySave/Recent` `planSave/Get/Recent` `positionAdd/Update/Remove/LoadAll` `DEFAULT_SETTINGS` `settingsLoad/Save` `storageEstimate` `clearCache` |
-| `ui.js` | 269 | DOM 与格式化工具（无业务逻辑） | `$` `$$` `el` `esc` `fmtNum` `fmtPct` `fmtMoney` `fmtInt` `updown` `signCls` `toast` `openSheet` `closeSheet` `copyText` `skeletonCards` `emptyState` `errorBox` `showProgress` `hideProgress` `switchRow` `timeAgo` |
+| `ui.js` | 292 | DOM 与格式化工具（无业务逻辑）。`openSheet` 会给每个弹层加一个 sticky 的「← 返回」按钮 | `$` `$$` `el` `esc` `fmtNum` `fmtPct` `fmtMoney` `fmtInt` `updown` `signCls` `toast` `openSheet` `closeSheet` `copyText` `skeletonCards` `emptyState` `errorBox` `showProgress` `hideProgress` `switchRow` `timeAgo` |
 | `charts.js` | 453 | Canvas 2D 手绘图表（零依赖） | `drawKline` `drawMainlineBars` `drawTrendLine` `drawDimBars` `drawSparkline` `drawEquityCurve` |
 
 ### 4.2 计算层（纯函数，无 DOM、无网络）

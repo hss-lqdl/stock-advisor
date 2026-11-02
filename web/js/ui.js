@@ -103,25 +103,52 @@ export function openSheet(contentNode, opt = {}) {
   const mask = $('#sheetMask');
   const box = $('#sheetContent');
   if (!mask || !box) return;
+
+  // 上一次弹层的遮罩监听要清掉，否则连开两个弹层时 onClose 会被触发两次
+  if (mask._onMask) {
+    mask.removeEventListener('click', mask._onMask);
+    mask._onMask = null;
+  }
+
+  let closed = false;
+  const doClose = () => {
+    if (closed) return;
+    closed = true;
+    if (mask._onMask) {
+      mask.removeEventListener('click', mask._onMask);
+      mask._onMask = null;
+    }
+    closeSheet();
+    if (typeof opt.onClose === 'function') opt.onClose();
+  };
+
+  // 【为什么要有这个返回按钮】
+  // App 装到 iPhone 主屏后是 standalone 模式，没有浏览器的返回键，也没有地址栏。
+  // 弹层原本只能靠「点遮罩空白处」关闭，用户一旦没点准就会以为界面卡死了。
+  // 因此每个弹层都在顶部固定一个显式的「← 返回」。
+  const bar = el('div', { class: 'sheet-bar' }, [
+    el('button', {
+      class: 'sheet-back',
+      type: 'button',
+      'aria-label': '返回',
+      onclick: doClose,
+    }, ['← 返回']),
+    opt.title ? el('div', { class: 'sheet-bar-title', text: opt.title }) : null,
+  ]);
+
+  const body = el('div', { class: 'sheet-body' });
+
   box.innerHTML = '';
-  if (typeof contentNode === 'string') box.innerHTML = contentNode;
-  else box.append(contentNode);
+  box.append(bar, body);
+  if (typeof contentNode === 'string') body.innerHTML = contentNode;
+  else if (contentNode) body.append(contentNode);
+
   mask.classList.remove('hidden');
   requestAnimationFrame(() => mask.classList.add('show'));
 
-  if (opt.onClose) {
-    const handler = () => {
-      mask.removeEventListener('click', onMask);
-      opt.onClose();
-    };
-    const onMask = (e) => {
-      if (e.target === mask) {
-        closeSheet();
-        handler();
-      }
-    };
-    mask.addEventListener('click', onMask);
-  }
+  const onMask = (e) => { if (e.target === mask) doClose(); };
+  mask._onMask = onMask;
+  mask.addEventListener('click', onMask);
 }
 
 export function closeSheet() {

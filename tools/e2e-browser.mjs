@@ -94,6 +94,17 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function main() {
   await fsp.mkdir(OUT, { recursive: true });
 
+  // 【必须每次都清空 profile】
+  // profile 目录名是固定的，跨次运行会残留上一轮的 Service Worker 与 CacheStorage。
+  // 一旦上一轮把旧版 js 缓存下来，这一轮页面就可能拿到旧代码——
+  // 表现是「代码明明改了，页面却还是老样子」，极难排查（本次就踩到过）。
+  const PROFILE = path.join(os.tmpdir(), 'stock-advisor-e2e-profile');
+  try {
+    fs.rmSync(PROFILE, { recursive: true, force: true });
+  } catch (e) {
+    info('清理旧 profile 失败（不影响本次运行）', String(e && e.message ? e.message : e));
+  }
+
   const browser = await puppeteer.launch({
     executablePath: edge,
     headless: HEADFUL ? false : 'new',
@@ -108,7 +119,7 @@ async function main() {
       '--hide-scrollbars',
       // 浏览器 profile 必须放系统临时目录：放 OUT 里会残留 50MB+ 的 Cache 文件，
       // 污染截图目录（实测 _profile 占 52MB）。
-      `--user-data-dir=${path.join(os.tmpdir(), 'stock-advisor-e2e-profile')}`,
+      `--user-data-dir=${PROFILE}`,
     ],
     defaultViewport: { width: 393, height: 852, deviceScaleFactor: 2, isMobile: true, hasTouch: true },
     protocolTimeout: 180000,
@@ -337,11 +348,28 @@ async function main() {
       ok('详情弹层可打开', sheet.maskVisible, `内容 ${sheet.contentLen} 字符`);
       if (sheet.maskVisible) {
         await page.screenshot({ path: path.join(OUT, 'sheet-detail.png') });
-        await page.evaluate(() => {
-          const m = document.getElementById('sheetMask');
-          if (m) m.classList.add('hidden');
+
+        // 弹层必须自带「返回」按钮：iPhone 主屏模式没有浏览器返回键，
+        // 只能靠这个按钮退出弹层（见 ui.js openSheet 的说明）。
+        const back = await page.evaluate(() => {
+          const b = document.querySelector('#sheetContent .sheet-back');
+          return { exists: !!b, text: b ? (b.textContent || '').trim() : '' };
         });
-        await sleep(300);
+        ok('弹层有「返回」按钮', back.exists, back.exists ? back.text : '未找到 .sheet-back');
+
+        // 点「返回」必须真的能关掉弹层
+        const clicked = await page.evaluate(() => {
+          const b = document.querySelector('#sheetContent .sheet-back');
+          if (!b) return false;
+          b.click();
+          return true;
+        });
+        await sleep(600);
+        const closed = await page.evaluate(() => {
+          const m = document.getElementById('sheetMask');
+          return m ? m.classList.contains('hidden') : true;
+        });
+        ok('点「返回」能关闭弹层', clicked && closed, closed ? '已关闭' : '仍然打开');
       }
     } catch (e) {
       ok('详情弹层可打开', false, String(e.message || e));

@@ -547,6 +547,39 @@ body { min-height: 100vh; min-height: 100dvh; }
 }
 .sheet-title .cd { font-size: 12px; color: var(--txt-3); font-weight: 600; }
 
+/* ---------- 弹层顶部回退栏 ----------
+   iPhone 装到主屏后是 standalone，没有浏览器返回键，也没有地址栏。
+   弹层如果只能靠「点遮罩空白」关闭，用户很容易以为卡死。
+   这个栏固定在滚动区域顶部（sticky），滚动到底也能随时返回。 */
+.sheet-bar {
+  position: sticky; top: 0; z-index: 3;
+  display: flex; align-items: center; gap: 10px;
+  /* 负 margin 抵消 .sheet-content 的内边距，让底边框贴到弹层两边 */
+  margin: -14px -16px 12px;
+  padding: 10px 16px;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--line-2);
+}
+.sheet-back {
+  appearance: none; -webkit-appearance: none;
+  border: 1px solid var(--line-2);
+  background: var(--bg-2);
+  color: var(--txt);
+  font-size: 13px; font-weight: 700;
+  font-family: inherit;
+  padding: 7px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform .12s ease, background .15s ease;
+}
+.sheet-back:active { transform: scale(.95); background: var(--bg-3); }
+.sheet-bar-title {
+  margin-left: auto;
+  font-size: 12.5px; font-weight: 600; color: var(--txt-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
 /* ---------------- 详情 ---------------- */
 .det-kv { display: grid; grid-template-columns: repeat(2,1fr); gap: 8px 14px; margin-top: 12px; }
 .det-kv .it { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
