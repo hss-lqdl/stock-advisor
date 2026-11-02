@@ -1,0 +1,28 @@
+{
+  "name": "stock-advisor",
+  "version": "1.3.4",
+  "private": true,
+  "description": "A股每日买入计划 · 纯前端 PWA（上证/深证选股 + 主线情绪 + 尾盘计划）",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "serve": "node server.mjs --no-browser",
+    "dev": "node server.mjs --no-browser",
+    "test": "node tools/selftest.mjs",
+    "test:live": "node tools/selftest.mjs --live",
+    "test:e2e": "node tools/e2e-browser.mjs --live",
+    "test:all": "node tools/selftest.mjs && node tools/selftest.mjs --live && node tools/e2e-browser.mjs --live",
+    "icons": "python tools/make_icons.py"
+  },
+  "keywords": [
+    "a-share",
+    "stock",
+    "pwa",
+    "eastmoney",
+    "quant"
+  ],
+  "license": "UNLICENSED"
+}

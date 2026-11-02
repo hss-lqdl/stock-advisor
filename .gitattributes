@@ -1,0 +1,10 @@
+# 统一换行：仓库统一存 LF，Windows 批处理保留 CRLF
+* text=auto eol=lf
+
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+*.png binary
+*.jpg binary
+*.ico binary
+*.webp binary

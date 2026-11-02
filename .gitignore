@@ -1,0 +1,28 @@
+# ---------------- 运行期产物（可随时删除，会自动重建） ----------------
+.server_url
+*.log
+
+# ---------------- 测试产物 ----------------
+tools/_e2e/node_modules/
+tools/_e2e/package-lock.json
+tools/_e2e/shots/
+tools/_e2e/*.log
+tools/_e2e/out.txt
+tools/_e2e/_profile/
+
+# ---------------- 依赖与构建（本项目零依赖，留作兜底） ----------------
+node_modules/
+runtime/
+
+# ---------------- 编辑器 / 系统 ----------------
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# ---------------- 临时文件 ----------------
+*.tmp
+*.bak
+~$*
