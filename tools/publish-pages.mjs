@@ -42,6 +42,31 @@ const SOURCE_BRANCH = 'main';
 const SITE_URL = `https://${OWNER.toLowerCase()}.github.io/${REPO}/`;
 
 /**
+ * 自定义域名（可选）。
+ *
+ * 来源优先级：
+ *  1. 环境变量 PAGES_DOMAIN（临时切换 / CI 用）
+ *  2. web/CNAME 文件内容（长期配置，跟源码一起提交）
+ * 两者都没有则走默认的 *.github.io 地址。
+ *
+ * 关键点：GitHub Pages 读取「发布分支根目录」的 CNAME 文件来决定域名。
+ * 本脚本每次都会 force push 重建 gh-pages，因此 CNAME 必须由脚本写入，
+ * 否则手工在网页上设置的域名会被下一次发布抹掉。
+ */
+const DOMAIN = (() => {
+  const env = (process.env.PAGES_DOMAIN || '').trim();
+  if (env) return env.replace(/^https?:\/\//i, '').replace(/\/+$/, '').toLowerCase();
+  const f = path.join(WEB, 'CNAME');
+  if (fs.existsSync(f)) {
+    const first = fs.readFileSync(f, 'utf8').trim().split(/\s+/)[0] || '';
+    return first.replace(/^https?:\/\//i, '').replace(/\/+$/, '').toLowerCase();
+  }
+  return '';
+})();
+const DOMAIN_URL = DOMAIN ? `https://${DOMAIN}/` : '';
+const APEX = DOMAIN && DOMAIN.split('.').length === 2 ? DOMAIN : '';
+
+/**
  * 网络类 git 操作（push / ls-remote）的认证参数。
  *
  * 两个坑，都是本机实测踩出来的：
@@ -205,6 +230,11 @@ async function main() {
     fs.cpSync(WEB, tmp, { recursive: true });
     // .nojekyll：绕开 Jekyll（会忽略下划线开头的文件，并拖慢构建）
     fs.writeFileSync(path.join(tmp, '.nojekyll'), '');
+    // CNAME：GitHub Pages 靠发布分支根目录的这个文件认自定义域名
+    if (DOMAIN) {
+      fs.writeFileSync(path.join(tmp, 'CNAME'), DOMAIN + '\n');
+      info(`已写入 CNAME → ${DOMAIN}`);
+    }
 
     const files = [];
     (function walk(dir, rel = '') {
@@ -257,14 +287,31 @@ async function main() {
     die(`查询 Pages 配置失败（HTTP ${cfg.status}）`, await hintPages());
   }
 
+  // -- 5b. 绑定自定义域名 ----------------------------------------------------
+  if (DOMAIN) {
+    const cur = await api(`/repos/${OWNER}/${REPO}/pages`);
+    const curCname = cur.status === 200 && cur.body.cname ? String(cur.body.cname).toLowerCase() : '';
+    if (curCname === DOMAIN) {
+      ok(`域名已绑定 ${DOMAIN}`);
+    } else {
+      const r = await api(`/repos/${OWNER}/${REPO}/pages`, { method: 'PUT', body: { cname: DOMAIN } });
+      if (r.status === 204 || r.status === 200) ok(`域名已绑定 ${DOMAIN}`);
+      else info(`绑定域名返回 HTTP ${r.status}：${JSON.stringify(r.body).slice(0, 200)}`);
+      info('GitHub 需要几分钟申请 TLS 证书，期间 https 可能报证书错误');
+    }
+  }
+
   // -- 6. 等待上线 -----------------------------------------------------------
   step(6, '等待上线');
+  // 绑了自定义域名后 *.github.io 会 301 跳过去，因此直接探自定义域名；
+  // 若 DNS 还没生效，这里会优雅降级成提示，而不是失败。
+  const probeUrl = DOMAIN_URL || SITE_URL;
   const deadline = Date.now() + 300_000;
   let live = false;
   let last = '';
   while (Date.now() < deadline) {
     try {
-      const r = await fetch(SITE_URL, { redirect: 'follow' });
+      const r = await fetch(probeUrl, { redirect: 'follow' });
       const body = await r.text();
       if (r.status === 200 && /<title>|id="app"/.test(body)) { live = true; break; }
       last = `HTTP ${r.status}`;
@@ -277,6 +324,10 @@ async function main() {
   if (live) {
     console.log(' '.repeat(60) + '\r');
     ok('站点已可访问');
+  } else if (DOMAIN) {
+    console.log(' '.repeat(60) + '\r');
+    info(`自定义域名暂未生效（${last}），通常是 DNS 未生效或证书仍在签发`);
+    info(`请确认 ${DOMAIN} 的解析已按下方记录配置，然后重新打开：${DOMAIN_URL}`);
   } else {
     console.log(' '.repeat(60) + '\r');
     info(`首次部署通常需要 1–3 分钟，当前尚未生效（${last}）`);
@@ -284,10 +335,30 @@ async function main() {
   }
 
   console.log(C.bold('\n完成\n'));
-  console.log(`  站点      ${SITE_URL}`);
+  console.log(`  站点      ${DOMAIN_URL || SITE_URL}`);
+  if (DOMAIN) console.log(C.dim(`  默认地址  ${SITE_URL}（会自动跳转到上面的自定义域名）`));
   console.log(`  仓库      https://github.com/${OWNER}/${REPO}`);
   console.log(`  源码分支  ${SOURCE_BRANCH}`);
   console.log(`  站点分支  ${SITE_BRANCH}`);
+
+  if (DOMAIN) {
+    console.log(C.bold('\nDNS 解析（去你的域名服务商添加，缺一不可）\n'));
+    if (APEX) {
+      console.log(`  主机记录  @      类型 A      值 185.199.108.153`);
+      console.log(`                                 185.199.109.153`);
+      console.log(`                                 185.199.110.153`);
+      console.log(`                                 185.199.111.153`);
+      console.log(`  主机记录  @      类型 AAAA   值 2606:50c0:8000::153`);
+      console.log(`                                 2606:50c0:8001::153`);
+      console.log(`                                 2606:50c0:8002::153`);
+      console.log(`                                 2606:50c0:8003::153`);
+      console.log(`  主机记录  www    类型 CNAME  值 ${OWNER.toLowerCase()}.github.io`);
+    } else {
+      console.log(`  主机记录  ${DOMAIN.split('.')[0]}  类型 CNAME  值 ${OWNER.toLowerCase()}.github.io`);
+    }
+    console.log(C.dim('\n  解析生效后，到仓库 Settings → Pages 勾选 Enforce HTTPS\n'));
+  }
+
   console.log(C.dim('\niPhone 安装：Safari 打开上面的站点 → 分享 → 添加到主屏幕\n'));
 }
 

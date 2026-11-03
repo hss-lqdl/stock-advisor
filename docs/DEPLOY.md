@@ -133,3 +133,96 @@ node tools/publish-pages.mjs
 | 手机上还是旧版本 | `web/sw.js` 的 `VERSION` 没 bump |
 | 图片/JS 404 | `gh-pages` 分支内容不完整，重新发布 |
 | Pages 显示 "Your site is having problems building" | 确认 `.nojekyll` 在分支根目录 |
+| 自定义域名填了但一发布就变回空白 | 手工在网页上设的域名会被 `gh-pages` 强推覆盖 —— 必须用 `web/CNAME`（见第七节） |
+| 自定义域名报 `NET::ERR_CERT_COMMON_NAME_INVALID` | 证书还在签发（几分钟到 24 小时），先等；超过一天检查 DNS 是否两条都配对 |
+
+---
+
+## 七、自定义域名（可选）
+
+默认地址 `https://hss-lqdl.github.io/stock-advisor/` 已经能用。想要更好记的地址（例如
+`https://stock.example.com`），按下面三步做。
+
+### 先说清楚收益与代价
+
+| | 说明 |
+|---|---|
+| 好处 | 地址短好记、不暴露 GitHub 用户名、以后换托管后端时手机上的书签不用改 |
+| **不是好处** | **不会让国内访问变快**。解析出来仍是 GitHub 的 `185.199.108-111.153`，能不能连上取决于你到 GitHub 的线路 |
+| 代价 | 多一个域名年费；需要自己配 DNS；证书签发有等待期 |
+
+> 想真正改善国内访问，需要套 CDN（Cloudflare 等）或换国内静态托管 —— 那是另一件事，
+> 且国内托管要求域名已备案。**只绑域名不解决连通性问题。**
+
+### 步骤 1：改代码侧（一条命令）
+
+把域名写进 `web/CNAME`（这个文件会跟着源码走，发布脚本会自动带到 `gh-pages` 根目录）：
+
+```powershell
+cd C:\Users\lqdl\Downloads\stock_advisor
+Set-Content -Path web\CNAME -Value "stock.example.com" -Encoding ascii -NoNewline
+```
+
+> 为什么必须落在文件里：GitHub Pages 靠**发布分支根目录的 `CNAME` 文件**认域名。
+> 本项目的发布脚本每次都 `--force` 重建 `gh-pages`，在网页上手工填的域名会被下一次发布冲掉。
+
+临时想试别的域名，也可以不改文件，直接给环境变量：
+
+```powershell
+$env:PAGES_DOMAIN = "stock.example.com"
+```
+
+优先级：`PAGES_DOMAIN` > `web/CNAME`。
+
+### 步骤 2：配 DNS 解析
+
+去你买域名的地方（阿里云 / 腾讯云 / Cloudflare / Namecheap 都行）加记录。
+
+**如果用的是根域名**（`example.com`，两段式）—— 四条 A + 四条 AAAA + 一条 www：
+
+| 主机记录 | 类型 | 值 |
+|---|---|---|
+| `@` | A | `185.199.108.153` |
+| `@` | A | `185.199.109.153` |
+| `@` | A | `185.199.110.153` |
+| `@` | A | `185.199.111.153` |
+| `@` | AAAA | `2606:50c0:8000::153` |
+| `@` | AAAA | `2606:50c0:8001::153` |
+| `@` | AAAA | `2606:50c0:8002::153` |
+| `@` | AAAA | `2606:50c0:8003::153` |
+| `www` | CNAME | `hss-lqdl.github.io` |
+
+> 这些 IP 是 GitHub Pages 官方的固定地址，上面 8 条已用 DNS 实测核对过。
+> 有的服务商不支持给 `@` 加 AAAA，那就只配 4 条 A，IPv6 不是必须的。
+> **不要**给 `@` 配 CNAME（根域名 CNAME 违反 DNS 规范，部分服务商允许但会出问题）。
+
+**如果用的是子域名**（`stock.example.com`）—— 一条就够：
+
+| 主机记录 | 类型 | 值 |
+|---|---|---|
+| `stock` | CNAME | `hss-lqdl.github.io` |
+
+CLI 自检（解析生效后才会返回上面的 IP）：
+
+```powershell
+nslookup stock.example.com
+```
+
+### 步骤 3：发布 + 开 HTTPS
+
+```powershell
+$env:GH_TOKEN = "你的token"
+npm run publish
+```
+
+脚本会：把 `CNAME` 写进站点 → 推送 → 调 API 绑定域名 → 探活。最后会打印该配的 DNS 记录。
+
+然后等证书（几分钟到 24 小时），打开 <https://github.com/hss-lqdl/stock-advisor/settings/pages>
+勾上 **Enforce HTTPS**（证书没签发好之前这个勾是灰的）。
+
+### 绑定之后的行为
+
+- 旧地址 `https://hss-lqdl.github.io/stock-advisor/` 会自动 **301 跳转**到新域名，手机上的旧主屏图标仍能打开。
+- 站点根路径从 `/stock-advisor/` 变成 `/`。本项目所有资源都用相对路径（`./index.html`、`./sw.js`、`./`），
+  **无需改任何代码**；Service Worker 的 scope 会自动跟随到新根目录。
+- 想撤回：删掉 `web/CNAME` 重新发布，再到 Settings → Pages 把 Custom domain 清空。
