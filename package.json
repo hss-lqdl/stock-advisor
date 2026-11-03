@@ -15,7 +15,8 @@
     "test:live": "node tools/selftest.mjs --live",
     "test:e2e": "node tools/e2e-browser.mjs --live",
     "test:all": "node tools/selftest.mjs && node tools/selftest.mjs --live && node tools/e2e-browser.mjs --live",
-    "icons": "python tools/make_icons.py"
+    "icons": "python tools/make_icons.py",
+    "publish": "node tools/publish-pages.mjs"
   },
   "keywords": [
     "a-share",

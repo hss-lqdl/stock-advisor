@@ -6,11 +6,20 @@
 **零后端、零第三方依赖、零 CDN、零签名、零账号、零费用。**
 所有数据与计算都在你自己的手机/电脑里完成，不上传任何信息。
 
+## 已经在线（推荐用法）
+
+**<https://hss-lqdl.github.io/stock-advisor/>**
+
+iPhone 用 **Safari** 打开上面的地址 → 分享 → 添加到主屏幕，就能随时随地使用：
+不用开电脑、不用和电脑同一个 WiFi；HTTPS 下 Service Worker 正常注册，断网也能打开。
+下方内容是该地址的原理、本地开发与部署维护说明。
+
 ## 文档导航
 
 | 你是 | 先看 |
 |---|---|
-| **只想用起来** | 本文件（从下一节开始） |
+| **只想用手机用起来** | 上面的在线地址；本文件往下是原理与本地开发 |
+| **想重新部署 / 换账号** | [docs/DEPLOY.md](docs/DEPLOY.md) — GitHub Pages 发布、iPhone 安装、排错 |
 | **要改代码 / 接手开发** | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 架构、模块契约、数据流 |
 | **想知道每个文件干什么** | [docs/FILES.md](docs/FILES.md) — 文件清单与职责 |
 | **想知道还差什么、哪里会痛** | [docs/BACKLOG.md](docs/BACKLOG.md) — 已知限制、路线、技术债、踩坑红线 |
@@ -23,6 +32,7 @@ node server.mjs                 # 起服务（等同双击 启动.bat）
 npm test                        # 离线算法自测（364 项，1 秒内）
 npm run test:live               # 联网全链路自测（378~392 项，需真实行情）
 npm run test:e2e                # 真浏览器 E2E（41~44 项，需先起服务）
+npm run publish                 # 发布到 GitHub Pages（需 GH_TOKEN，见 docs/DEPLOY.md）
 python tools/make_icons.py      # 重新生成图标
 ```
 
