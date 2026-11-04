@@ -61,14 +61,19 @@ boot()
      └─ engine.loadAll({settings, onProgress})
          ├─ api.fetchSnapshot()         56 分页并发，5400+ 只
          ├─ api.fetchBoards()           概念 516 + 行业 496
-         ├─ universe.buildUniverse()    ★ 10 道过滤 → pool
+         ├─ universe.buildUniverse()    ★ 基础过滤 10 道 → pool
          ├─ mainline.analyzeMainline()  板块清洗 + 打分 → Top20/退潮10
-         ├─ mainline.annotatePool()     给每只票挂主线得分
+         ├─ mainline.annotatePool()     给每只票挂主线得分 + mainRank
          ├─ api.fetchLimitPool()        涨停/跌停池
          └─ market.analyzeMarket()      四维打分 → 档位
      └─ engine.analyze(state)
-         ├─ api.fetchKlines()           候选池前 N 只日 K（并发池）
+         ├─ mainline.annotatePool()     主线门槛（Top20 且非退潮）
+         ├─ api.fetchKlines()           四策略配额抽样日 K（并发池）
+         ├─ strategy.applyStage1()      策略专属门槛 · 快照初筛
          ├─ indicators.computeFactors() 8 个因子
+         ├─ strategy.computeLeader()    同行业板块龙头度（leader）
+         ├─ strategy.applyStage2()      策略专属门槛 · K 线因子精筛
+         ├─ strategy.relaxStage2()      极端行情保底放宽
          ├─ strategy.scoreCandidates()  分位标准化 + 加权
          ├─ strategy.applyPortfolioConstraints()  行业/主线各 ≤2
          └─ plan.buildDailyPlan()       委托价/股数/止损止盈/费用
@@ -199,12 +204,14 @@ boot()
 
 三层，全部不需要人工点界面：
 
-1. **离线单元**（`node tools/selftest.mjs`，364 项）：纯函数断言，覆盖 10 道过滤、主线打分、
-   四维打分、8 个因子、分位标准化、委托价/股数/止损止盈/费用、条件单文本、K 线解析。
-2. **联网全链路**（`--live`，378~392 项）：真实拉东财数据跑完整链路，打印当日推荐供人工核对。
+1. **离线单元**（`node tools/selftest.mjs`，465 项）：纯函数断言，覆盖 10 道基础过滤、
+   四套策略专属门槛（Stage1/Stage2）与保底放宽、主线打分、四维打分、9 个因子、分位标准化、
+   委托价/股数/止损止盈/费用、条件单文本、K 线解析。
+2. **联网全链路**（`--live`，465~500 项）：真实拉东财数据跑完整链路，打印当日推荐供人工核对。
    **上游限流时会主动跳过依赖它的断言并说明原因**，这是刻意设计，不是掩盖失败。
-3. **真浏览器 E2E**（`tools/e2e-browser.mjs --live`，41~44 项）：iPhone 14 Pro 视口，5 个 Tab 渲染、
-   manifest/图标/SW/IndexedDB、详情弹层、无横向溢出、深色主题、无页面异常。
+3. **真浏览器 E2E**（`tools/e2e-browser.mjs --live`，44~47 项）：iPhone 14 Pro 视口，5 个 Tab 渲染、
+   manifest/图标/SW/IndexedDB、四策略选项与过滤明细分组、详情弹层、无横向溢出、深色主题、无页面异常。
+   也可加 `--url https://hss-lqdl.github.io/stock-advisor/` 直接对线上站点跑。
 
 判定标准统一是**失败 0 项**，而不是"项数等于某个固定值"——项数会随上游可用性浮动。
 
