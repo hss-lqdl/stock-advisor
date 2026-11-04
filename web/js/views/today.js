@@ -104,7 +104,7 @@ function renderAdvice(result) {
   const card = el('div', { class: 'card' });
 
   // poolStats 从 IndexedDB 恢复后 output getter 会丢失，这里做一次兜底推导，
-  // 避免首屏出现「股票池 -- 只」。
+  // 避免首屏出现「候选标的 -- 只」。
   const ps = result.poolStats || {};
   const poolOut = Number.isFinite(ps.output)
     ? ps.output
@@ -137,9 +137,9 @@ function renderAdvice(result) {
       el('div', { class: 's', text: `剩余 ${fmtInt(plan.cashLeft || 0)} 元` }),
     ]),
     el('div', { class: 'stat' }, [
-      el('div', { class: 'k', text: '股票池' }),
+      el('div', { class: 'k', text: '候选标的' }),
       el('div', { class: 'v small', text: fmtInt(poolOut) + ' 只' }),
-      el('div', { class: 's', text: `过主线 ${result.qualifiedCount} 只` }),
+      el('div', { class: 's', text: `${result.strategyName || '策略'} · 过主线 ${result.qualifiedCount} 只` }),
     ]),
   ]);
   card.append(stats);

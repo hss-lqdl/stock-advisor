@@ -116,21 +116,31 @@ boot()
 
 ### 4.2 策略（`strategy.js` `STRATEGIES`）
 
-| key | 名称 | 反向因子 |
-|---|---|---|
-| `balanced` | 均衡多因子 | `rsi`, `atrp` |
-| `momentum` | 趋势动量 | `rsi`, `atrp` |
-| `reversal` | 超跌反弹 | （见源码，按策略不同） |
+| key | 名称 | 反向因子 | 特色门槛与因子 |
+|---|---|---|---|
+| `balanced` | 均衡多因子 | `rsi`, `atrp` | 稳健多因子均衡配置 |
+| `momentum` | 趋势动量 | `rsi`, `atrp` | 均线全多头 + 动量突破 |
+| `reversal` | 超跌反弹 | `dd`, `rsi`, `atrp` | 深度回撤 + 超卖反抽 |
+| `dragon` | 龙头战法 | `atrp` | **属于主线 Top10** + **板块龙头度 ≥ 60** + 均线全多头 + 新增 `leader` 因子 (20%) |
 
 反向因子在 `crossSectionNormalize(rows, keys, reverseKeys)` 里取 `100 - pct`：
-即数值越低分越高（如 RSI 低 = 超卖 = 好）。
+即数值越低分越高（如 RSI 低 = 超卖 = 好）。注意 `dragon` 策略的 `rsi` 不做反向处理（龙头追强势）。
+
+### 4.2.1 股票池三段式过滤体系
+每种选股策略拥有专属的过滤链与明细展示：
+1. **基础过滤（共用 10 道）**：停牌 → ST/退市 → 低价 ≤2 元 → 市值不在 [min,max] → 成交额 <1 亿 → 换手率 <0.5% → 涨停/一字板 → 跌停 → 创业板（可关） → 一手成本超预算。
+2. **主线门槛（共用）**：所属板块入围近一周主线 Top20 且非退潮 Top10。
+3. **策略专属门槛（`strategy.js` `STRATEGY_FILTERS`）**：
+   - Stage 1（快照初筛）：按策略特质过滤成交额、换手、量比、市值及主线排名；
+   - Stage 2（K 线因子门槛）：过滤均线形态、动量、回撤及龙头度等深度因子。
+   - 保底放宽（`relaxStage2`）：避免极值行情空池，自动降级保底。
 
 ### 4.3 设置项（`store.js` `DEFAULT_SETTINGS`）
 
 ```js
 {
   capital: 50000,          // 本金
-  strategy: 'balanced',    // balanced | momentum | reversal
+  strategy: 'balanced',    // balanced | momentum | reversal | dragon
   maxMarketCap: 800,       // 亿元（总市值口径 f20）
   minMarketCap: 20,        // 亿元
   maxPicks: 5,

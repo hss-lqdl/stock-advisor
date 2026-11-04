@@ -589,6 +589,94 @@ async function testStrategy() {
   });
   ok(typeof reason === 'string' && reason.length > 5, 'buildReason 生成理由文本');
   info('理由样例', reason);
+
+  /* ---------- 龙头战法 ---------- */
+  ok(keys.includes('dragon'), '含龙头战法策略');
+  const dr = S.getStrategy('dragon');
+  near(Object.values(dr.weights).reduce((a, b) => a + b, 0), 1, 1e-6, '龙头战法权重合计 = 1');
+  ok(typeof dr.weights.leader === 'number', '龙头战法含 leader 因子权重');
+  ok((dr.reverseKeys || []).includes('atrp'), '龙头战法波动率反向（越低越好）');
+  ok(!(dr.reverseKeys || []).includes('rsi'), '龙头战法 RSI 不反向（追强势）');
+
+  /* ---------- 每种策略都有自己的过滤链 ---------- */
+  const fkeys = Object.keys(S.STRATEGY_FILTERS);
+  eq(fkeys.length, keys.length, '过滤链数量与策略数量一致');
+  for (const k of keys) {
+    const def = S.strategyFilter(k);
+    ok(Array.isArray(def.stage1) && def.stage1.length > 0, `${k} 有 stage1 快照门槛`);
+    ok(Array.isArray(def.stage2) && def.stage2.length > 0, `${k} 有 stage2 因子门槛`);
+    for (const f of def.stage1.concat(def.stage2)) {
+      ok(typeof f.label === 'string' && f.label.length > 0, `${k} 门槛有中文标签`);
+      ok(typeof f.test === 'function', `${k} 门槛可执行`);
+    }
+  }
+  const sigOf = (k) => S.strategyFilter(k).stage1.concat(S.strategyFilter(k).stage2)
+    .map((f) => f.label).join('|');
+  const sigs = new Set(keys.map(sigOf));
+  eq(sigs.size, keys.length, '四个策略的过滤门槛互不相同');
+
+  /* ---------- factorLabel 按策略动态标注反向 ---------- */
+  ok(S.factorLabel('rsi', 'balanced').includes('反向'), '均衡策略 RSI 标注反向');
+  ok(!S.factorLabel('rsi', 'dragon').includes('反向'), '龙头战法 RSI 不标注反向');
+  eq(S.factorLabel('leader', 'dragon'), '板块龙头度', 'leader 因子中文名');
+
+  /* ---------- computeLeader：同行业相对强度分位 ---------- */
+  const indRows = [];
+  for (let i = 0; i < 6; i++) {
+    indRows.push({ code: 'L' + i, industry: '软件开发', mom20: i * 0.05, vr: 1 + i * 0.1 });
+  }
+  indRows.push({ code: 'S1', industry: '独家行业', mom20: 9, vr: 9 });
+  const led = S.computeLeader(indRows);
+  const ledMap = new Map(led.map((r) => [r.code, r]));
+  eq(ledMap.get('L5').leader, 100, '同行业最强 → 龙头度 100');
+  eq(ledMap.get('L0').leader, 0, '同行业最弱 → 龙头度 0');
+  eq(ledMap.get('S1').leader, 50, '行业成分不足 5 只 → 中性 50');
+  ok(ledMap.get('L5').leader > ledMap.get('L3').leader, '龙头度随强度单调递增');
+  eq(indRows[0].leader, undefined, 'computeLeader 不修改入参');
+  info('龙头度样例', led.filter((r) => r.code.startsWith('L'))
+    .map((r) => r.code + '=' + r.leader).join(' '));
+
+  /* ---------- stage1：只用快照字段（无 K 线也能跑） ---------- */
+  const s1in = [
+    { code: 'D1', mainRank: 1, amount: 5e8, turnover: 5, mktCap: 100e8 },
+    { code: 'D2', mainRank: 10, amount: 5e8, turnover: 5, mktCap: 100e8 },
+    { code: 'D3', mainRank: 11, amount: 5e8, turnover: 5, mktCap: 100e8 },
+    { code: 'D4', mainRank: 9999, amount: 5e8, turnover: 5, mktCap: 100e8 },
+    { code: 'D5', mainRank: 3, amount: 1e8, turnover: 5, mktCap: 100e8 },
+  ];
+  const s1out = S.applyStage1(s1in, 'dragon').map((r) => r.code);
+  ok(s1out.includes('D1') && s1out.includes('D2'), '龙头战法：主线排名 ≤ 10 保留');
+  ok(!s1out.includes('D3') && !s1out.includes('D4'), '龙头战法：主线排名 > 10 剔除');
+  ok(!s1out.includes('D5'), '龙头战法：成交额不足 2 亿剔除');
+
+  /* ---------- stage2：因子门槛 ---------- */
+  const s2in = [
+    { code: 'M1', maAlign: 3, mom20: 0.1, dd: -0.05, rsi: 60 },
+    { code: 'M2', maAlign: 2, mom20: 0.1, dd: -0.05, rsi: 60 },
+    { code: 'M3', maAlign: 3, mom20: -0.02, dd: -0.05, rsi: 60 },
+    { code: 'M4', maAlign: 3, mom20: 0.1, dd: -0.30, rsi: 60 },
+    { code: 'M5', maAlign: 3, mom20: 0.1, dd: -0.05, rsi: 90 },
+  ];
+  const s2out = S.applyStage2(s2in, 'momentum').map((r) => r.code);
+  eq(s2out.join(','), 'M1', '趋势动量 stage2 只留全条件满足的');
+
+  /* ---------- 保底放宽：绝不给空结果 ---------- */
+  const FS = (await import(url('universe.js'))).FilterStats;
+  const stA = new FS();
+  const rA = S.relaxStage2([], s2in, s1in, stA);
+  eq(rA.relaxed, 'stage2', 'stage2 清空 → 放宽到 stage1');
+  eq(rA.rows.length, s2in.length, '放宽后返回 stage1 全集');
+  ok(stA.steps.some((x) => x.removed < 0), '放宽步骤记为负剔除（UI 显示 +N）');
+
+  const stB = new FS();
+  const rB = S.relaxStage2([], [{ code: 'only' }], s1in, stB);
+  eq(rB.relaxed, 'stage1', 'stage1 仍不足 → 放宽到主线全集');
+  eq(rB.rows.length, s1in.length, '最终回退到主线全集');
+
+  const stC = new FS();
+  const rC = S.relaxStage2(s2in, s2in, s1in, stC);
+  eq(rC.relaxed, null, '候选充足时不触发放宽');
+  eq(rC.rows.length, s2in.length, '候选充足时原样返回');
 }
 
 /* ============================================================
@@ -939,18 +1027,31 @@ async function testLive() {
   const { pool, stats } = U.buildUniverse(rows, { capital: 50000, maxPicks: 5 });
   console.log('  股票池 ' + pool.length + ' 只');
   // 池规模随「时点 + 当日成交额/换手/涨跌停分布」波动很大，不能写死窄区间：
-  //   · 成交额阈值是累计值 → 越接近收盘，越过 1 亿的票越多，池子越大
+  //   · 成交额阈值（≥1 亿）是当日「累计值」→ 早盘只有少数票累计过线，越接近收盘越多
   //   · 普跌日涨停票少 → 被「剔除涨停」刷掉的少，池子也更大
-  // 实测同一天不同时点出现过 1097 / 1149 / 1417 / 1820 / 1848 / 1899 / 2023。
-  // 因此这里只校验「量级合理」+「占总快照比例合理」，真正的硬约束由下面 0 ST / 0 超 800 亿等断言保证。
-  inRange(pool.length, 800, 2800, '股票池规模在 [800,2800]', '实际 ' + pool.length);
+  // 实测：同日 14:30 之后 1097~2023 只；而 09:44 仅 201 只（当时全市场成交额 ≥1 亿的只有 738 只）。
+  // 产品的设计用途是「尾盘 5 分钟下单」，因此量级断言只在尾盘时段启用；
+  // 其余时段只保证「没有被清空」，真正的硬约束由下面 0 ST / 0 超 800 亿 / 0 只创业板等断言保证。
+  const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
+  const tailSession = nowMin >= 870; // 14:30 之后视为尾盘
+  const hhmm = String(new Date().getHours()).padStart(2, '0') + ':' + String(new Date().getMinutes()).padStart(2, '0');
+  inRange(pool.length, 50, 2800, '股票池规模在 [50,2800]', '实际 ' + pool.length);
   const poolRatio = pool.length / rows.length;
-  inRange(poolRatio, 0.1, 0.6, '股票池占全市场比例在 [10%,60%]', '实际 ' + (poolRatio * 100).toFixed(1) + '%');
+  if (tailSession) {
+    inRange(pool.length, 800, 2800, '尾盘时段股票池规模在 [800,2800]', '实际 ' + pool.length);
+    inRange(poolRatio, 0.1, 0.6, '尾盘时段股票池占全市场比例在 [10%,60%]', '实际 ' + (poolRatio * 100).toFixed(1) + '%');
+  } else {
+    info('股票池规模', `${pool.length} 只 · ${hhmm} 盘中——成交额阈值为当日累计值，早盘池子偏小属正常，量级断言仅在 14:30 后启用（当前占全市场 ${(poolRatio * 100).toFixed(1)}%）`);
+  }
   ok(pool.every((s) => !U.isST(s.name)), '池内 0 只 ST 股');
   ok(pool.every((s) => s.mktCap <= 800e8), '池内 0 只市值 > 800 亿');
   ok(pool.every((s) => s.mktCap >= 20e8), '池内 0 只市值 < 20 亿');
   ok(pool.every((s) => s.price > 2), '池内 0 只价格 ≤ 2 元');
   ok(pool.every((s) => s.amount >= 1e8), '池内 0 只成交额 < 1 亿');
+  // 用户硬性要求（m03907）：排除创业板。真实数据上必须 0 只 300/301 开头。
+  const chiNext = pool.filter((s) => s.code.startsWith('300') || s.code.startsWith('301'));
+  ok(chiNext.length === 0, '池内 0 只创业板（300/301）',
+    chiNext.slice(0, 5).map((s) => s.code + ' ' + s.name).join(' '));
   const caps = pool.map((s) => s.mktCap / 1e8).sort((a, b) => a - b);
   const medianCap = caps[Math.floor(caps.length / 2)];
   if (caps.length) {
@@ -1082,9 +1183,19 @@ async function testLiveLate(pool, ml, qualified, rows, ztPool, dtPool, mkt) {
     info('K 线根数', `min ${Math.min(...nArr)} / max ${Math.max(...nArr)} / <240根 ${shortOnes} 只`);
     ok(shortOnes <= Math.max(1, Math.floor(klines.size * 0.05)), 'K 线 ≥ 240 根（允许 ≤5% 次新股）',
       shortOnes ? `${shortOnes}/${klines.size} 只不足 240 根` : '');
+    // 上游某个镜像偶尔会返回带空档的 K 线（实测 600825 有 17 天空档）。
+    // 产品的设计是「用 klineQuality 做质量门槛，残缺的宁可不入库」（见 engine.js:166-174），
+    // 因此这里校验的是「门槛生效 + 幸存样本干净且够用」，而不是「上游从不返回残缺数据」。
+    // 同时按产品同样的口径剔除残缺样本，保证后面的因子/选股/计划/回测断言跑在真实管线的数据上。
     const badQ = [...klines.entries()].filter(([, k]) => !A.klineQuality(k).ok);
-    ok(badQ.length === 0, '全部 K 线质量合格（无 >15 天空档）',
-      badQ.slice(0, 3).map(([c, k]) => c + ':' + A.klineQuality(k).reason).join(' '));
+    const goodQ = [...klines.entries()].filter(([, k]) => A.klineQuality(k).ok);
+    if (badQ.length) {
+      info('K 线质量门槛', `剔除残缺 ${badQ.length} 只（${badQ.slice(0, 3).map(([c, k]) => c + ':' + A.klineQuality(k).reason).join(' ')}）`);
+    }
+    ok(goodQ.length >= 20, '质量门槛后留存 K 线 ≥ 20 只', `${goodQ.length}/${klines.size}`);
+    ok(badQ.length <= Math.max(2, Math.floor(klines.size * 0.2)), '残缺 K 线占比 ≤ 20%（超出说明上游大面积异常）',
+      badQ.length ? `${badQ.length}/${klines.size}` : '');
+    for (const [c] of badQ) klines.delete(c); // 与 engine.js 一致：残缺样本不进入因子计算
   }
 
   // 8. 因子
@@ -1113,7 +1224,11 @@ async function testLiveLate(pool, ml, qualified, rows, ztPool, dtPool, mkt) {
   eq(picks.length, maxPicks, `选出 ${maxPicks} 只`);
 
   const plan = P.buildDailyPlan(picks, { capital: 50000, level: mkt.level, klines });
-  eq(plan.items.length, maxPicks, '计划条目数与选出只数一致');
+  // 防守/弱势档位下单只预算可能偏低（如单只预算 4375 元时，40 元以上的股票一手需 4000+ 元，若恰逢科创板 200 股起购则可能买不起被剔除），
+  // 因此计划条目数应为 picks.length - plan.unaffordable.length。
+  const expectedItems = picks.length - (plan.unaffordable ? plan.unaffordable.length : 0);
+  eq(plan.items.length, expectedItems, '计划条目数与可负担选出只数一致');
+  ok(plan.items.length > 0, '至少产生 1 只可买计划标的');
   ok(plan.items.every((it) => it.shares > 0), '每只都能买得起（股数 > 0）');
   ok(plan.totalAmount <= 50000, '总投入不超过本金', '实际 ' + plan.totalAmount);
 

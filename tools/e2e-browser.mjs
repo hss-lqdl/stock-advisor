@@ -268,6 +268,28 @@ async function main() {
       const file = path.join(OUT, `tab-${t.tab}.png`);
       await page.screenshot({ path: file, fullPage: false });
       tabShots.push({ tab: t.tab, file, ...st });
+
+      // 设置 Tab 专属校验：龙头战法策略选项 + 过滤明细分组 + 各策略初筛对比
+      if (t.tab === 'settings') {
+        const setCheck = await page.evaluate(() => {
+          const sel = document.querySelector('select');
+          const opts = sel ? [...sel.options].map((o) => ({ val: o.value, text: o.text })) : [];
+          const hasDragon = opts.some((o) => o.val === 'dragon' && o.text.includes('龙头战法'));
+          const secRows = document.querySelectorAll('#tab-settings .tbl tr.row-sec');
+          const titles = [...document.querySelectorAll('#tab-settings .card-title')].map((c) => (c.innerText || '').trim());
+          const filterTitle = titles.find((t) => t.includes('股票池过滤明细'));
+          return {
+            optCount: opts.length,
+            hasDragon,
+            secRowCount: secRows.length,
+            hasFilterTitle: !!filterTitle,
+            filterTitleText: filterTitle || '',
+          };
+        });
+        ok('设置页策略下拉包含「龙头战法」（4 种策略）', setCheck.optCount >= 4 && setCheck.hasDragon, `选项数 ${setCheck.optCount}，含龙头=${setCheck.hasDragon}`);
+        ok('过滤明细卡片标题包含当前策略名', setCheck.hasFilterTitle, setCheck.filterTitleText);
+        ok('过滤明细表格包含阶段分组小标题', setCheck.secRowCount >= 2, `分组行数 ${setCheck.secRowCount}`);
+      }
     } catch (e) {
       ok(`Tab[${t.tab}] 渲染`, false, String(e.message || e));
     }

@@ -1,6 +1,6 @@
 {
   "name": "stock-advisor",
-  "version": "1.3.5",
+  "version": "1.4.0",
   "private": true,
   "description": "A股每日买入计划 · 纯前端 PWA（上证/深证选股 + 主线情绪 + 尾盘计划）",
   "type": "module",

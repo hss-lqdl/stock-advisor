@@ -9,17 +9,17 @@ import {
 import {
   buildCopyText, buildConditionText, buildConditionOrders,
 } from '../plan.js';
-import { FACTOR_LABELS } from '../strategy.js';
+import { FACTOR_LABELS, factorLabel } from '../strategy.js';
 
-/** 因子分位条 */
-function factorRows(factors) {
+/** 因子分位条（因子名按当前策略标注「反向」） */
+function factorRows(factors, strategyKey) {
   const keys = Object.keys(FACTOR_LABELS);
   const wrap = el('div', { class: 'factor-list' });
   for (const k of keys) {
     const v = factors[k];
     if (!isFinite(v)) continue;
     wrap.append(el('div', { class: 'factor-row' }, [
-      el('div', { class: 'k', text: FACTOR_LABELS[k] }),
+      el('div', { class: 'k', text: factorLabel(k, strategyKey) }),
       el('div', { class: 'bar' }, [
         el('div', { class: 'fill', style: { width: Math.max(2, Math.min(100, v)) + '%' } }),
       ]),
@@ -145,10 +145,11 @@ function showSingleOrder(it, ctx) {
     }),
   ]));
 
-  // 因子分位
+  // 因子分位（因子名按当前策略标注反向）
   if (it.factors && Object.keys(it.factors).length) {
+    const sk = (ctx && ctx.result && ctx.result.strategy) || null;
     node.append(el('div', { class: 'sec-title', text: '因子分位（0–100）' }));
-    node.append(factorRows(it.factors));
+    node.append(factorRows(it.factors, sk));
   }
 
   openSheet(node);

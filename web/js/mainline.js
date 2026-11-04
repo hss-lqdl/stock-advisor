@@ -93,7 +93,11 @@ export function analyzeMainline(rawBoards) {
   const bottom = all.slice(-BOTTOM_N).reverse();
 
   const byName = new Map();
-  for (const b of all) byName.set(b.name, b);
+  const rankOf = new Map();
+  all.forEach((b, i) => {
+    byName.set(b.name, b);
+    rankOf.set(b.name, i + 1);   // 1 = 最强主线
+  });
 
   const topSet = new Set(top.map((b) => b.name));
   const bottomSet = new Set(bottom.map((b) => b.name));
@@ -101,7 +105,7 @@ export function analyzeMainline(rawBoards) {
   const scoreMax = all.length ? Math.max(...all.map((b) => b.score)) : 1;
   const scoreMin = all.length ? Math.min(...all.map((b) => b.score)) : 0;
 
-  return { all, top, bottom, byName, topSet, bottomSet, scoreMax, scoreMin };
+  return { all, top, bottom, byName, rankOf, topSet, bottomSet, scoreMax, scoreMin };
 }
 
 /**
@@ -146,8 +150,14 @@ export function stockMainline(stock, ml) {
   const inTop = matched.some((b) => ml.topSet.has(b.name));
   const inBottom = matched.some((b) => ml.bottomSet.has(b.name));
 
+  // 所属最强主线板块在全部有效板块中的排名（1 = 最强）。
+  // 龙头战法用它做「必须处在强主线」的硬门槛。
+  const best = top3[0];
+  const mainRank = best && ml.rankOf ? (ml.rankOf.get(best.name) || 9999) : 9999;
+
   return {
     mainScore,
+    mainRank,
     boards: top3,
     boardNames: top3.map((b) => b.name),
     matchedCount: matched.length,
@@ -175,6 +185,7 @@ export function annotatePool(pool, ml) {
     qualified.push({
       ...s,
       mainScore: r.mainScore,
+      mainRank: r.mainRank,
       mainBoards: r.boards,
       mainNames: r.boardNames,
       matchedCount: r.matchedCount,

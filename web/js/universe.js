@@ -1,6 +1,7 @@
 /* ============================================================
-   universe.js — 全市场快照 → 股票池过滤
-   9 道过滤，全部已用真实数据实测
+   universe.js — 全市场快照 → 股票池过滤（基础链 10 道，所有策略共用）
+   策略专属过滤在 strategy.js，从本链末端续接
+   全部已用真实数据实测
    ============================================================ */
 
 import { DEFAULT_SETTINGS } from './store.js';
@@ -67,15 +68,48 @@ export class FilterStats {
   constructor() {
     this.steps = [];
     this.input = 0;
+    this._section = '';
   }
   setInput(n) { this.input = n; }
+  /** 切换分组标题：其后 add() 的每一步都会带上 section 标记，UI 据此插入小标题行 */
+  section(title) {
+    this._section = String(title || '');
+    return this;
+  }
   add(label, before, after) {
-    this.steps.push({ label, removed: before - after, remain: after });
+    this.steps.push({
+      label,
+      removed: before - after,
+      remain: after,
+      section: this._section,
+    });
     return after;
   }
   get output() {
-    return this.steps.length ? this.steps[this.steps.length - 1].remain : this.input;
+    for (let i = this.steps.length - 1; i >= 0; i--) {
+      if (this.steps[i].label) return this.steps[i].remain;
+    }
+    return this.input;
   }
+  clone() {
+    const c = new FilterStats();
+    c.input = this.input;
+    c._section = this._section;
+    c.steps = this.steps.map((s) => ({ ...s }));
+    return c;
+  }
+}
+
+/**
+ * 复制一份过滤统计（能复制就复制，拿到的不是 FilterStats 时退化为新建）。
+ * 策略专属过滤链从基础链的末尾续写，所以需要克隆而不是重算。
+ */
+export function cloneStats(stats) {
+  if (stats && typeof stats.clone === 'function') return stats.clone();
+  const s = new FilterStats();
+  if (stats && typeof stats.input === 'number') s.setInput(stats.input);
+  if (stats && Array.isArray(stats.steps)) s.steps = stats.steps.map((x) => ({ ...x }));
+  return s;
 }
 
 /**
@@ -89,6 +123,7 @@ export function buildUniverse(rawRows, settings = {}) {
   const stats = new FilterStats();
   const rows = Array.isArray(rawRows) ? rawRows : [];
   stats.setInput(rows.length);
+  stats.section('基础过滤（所有策略共用）');
 
   // 标准化 + 剔除停牌（f2 为字符串 "-"）
   let cur = [];
@@ -165,10 +200,14 @@ export function buildUniverse(rawRows, settings = {}) {
 
   // 8. 一手成本 ≤ 单只预算（关键：5万本金下必须能买得起）
   //    单只预算按「进攻档 80% 仓位 / 最多 5 只」的宽松上限估算，
-  //    实际下单时再按当日档位精确计算。
+  //    实际下单时再按当日档位精确计算。科创板（688开头）一手至少 200 股。
   const budgetPerStock = (cfg.capital * 0.80) / Math.max(1, cfg.maxPicks);
   before = cur.length;
-  cur = cur.filter((s) => isFinite(s.price) && s.price * 100 <= budgetPerStock);
+  cur = cur.filter((s) => {
+    if (!isFinite(s.price)) return false;
+    const lotSize = String(s.code).startsWith('688') ? 200 : 100;
+    return s.price * lotSize <= budgetPerStock;
+  });
   stats.add(`一手成本 ≤ ${Math.round(budgetPerStock)} 元`, before, cur.length);
 
   // 9. 剔除北交所 / 非沪深标的（范围已由 fs 限制，这里兜底）

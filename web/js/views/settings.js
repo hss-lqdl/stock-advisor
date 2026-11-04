@@ -11,7 +11,7 @@ import {
   settingsLoad, settingsSave, clearCache, storageEstimate,
   klinesCount, positionsClear, DEFAULT_SETTINGS,
 } from '../store.js';
-import { STRATEGIES } from '../strategy.js';
+import { STRATEGIES, strategyFilter } from '../strategy.js';
 import { runBacktest, runBacktestMatrix } from '../backtest.js';
 
 /** 输入项 */
@@ -21,6 +21,22 @@ function field(label, hint, inputNode) {
     inputNode,
     hint ? el('div', { class: 'hint', text: hint }) : null,
   ]);
+}
+
+/**
+ * 取「基础过滤」那一段结束时的剩余只数 —— 即股票池规模（不含主线/策略门槛）。
+ * 兼容旧版数据：旧版 steps 没有 section 字段，此时全部步骤同属一段，取最后一步。
+ */
+function baseSectionOutput(steps, input) {
+  const n = Number(input) || 0;
+  if (!Array.isArray(steps) || !steps.length) return n;
+  const first = steps[0].section || '';
+  let out = n;
+  for (const st of steps) {
+    if ((st.section || '') !== first) break;
+    if (st.label) out = st.remain;
+  }
+  return out;
 }
 
 /** 回测结果弹层 */
@@ -170,13 +186,33 @@ export async function renderSettings(root, ctx) {
     if (k === s.strategy) opt.selected = true;
     stratSel.append(opt);
   }
+
+  // 策略专属过滤链的可读描述（切换策略时即时更新）
+  const stratHintNode = el('div', { class: 'hint' });
+  const refreshStratHint = (key) => {
+    const def = strategyFilter(key);
+    const desc = STRATEGIES[key] ? STRATEGIES[key].desc : '';
+    const s1 = (def.stage1 || []).map((f) => f.label).join('、') || '无';
+    const s2 = (def.stage2 || []).map((f) => f.label).join('、') || '无';
+    stratHintNode.innerHTML =
+      esc(desc) +
+      '<br><b>快照门槛：</b>' + esc(s1) +
+      '<br><b>因子门槛：</b>' + esc(s2);
+  };
+  refreshStratHint(s.strategy);
+
   stratSel.addEventListener('change', async () => {
+    s.strategy = stratSel.value;
+    refreshStratHint(s.strategy);
     await settingsSave({ strategy: stratSel.value });
     toast('策略已切换，重新分析后生效');
     if (ctx.onAnalyze) ctx.onAnalyze();
   });
-  basic.append(field('选股策略',
-    STRATEGIES[s.strategy] ? STRATEGIES[s.strategy].desc : '', stratSel));
+  basic.append(el('div', { class: 'field' }, [
+    el('label', { text: '选股策略' }),
+    stratSel,
+    stratHintNode,
+  ]));
 
   const picksSel = el('select', { class: 'select' });
   for (const n of [3, 4, 5]) {
@@ -299,6 +335,17 @@ export async function renderSettings(root, ctx) {
     klCount = await klinesCount();
   } catch (e) { /* ignore */ }
 
+  // poolStats 从 IndexedDB 恢复后 output getter 会丢失，两处都要兜底推导
+  const rps = (ctx.result && ctx.result.poolStats) || {};
+  const poolOut = Number.isFinite(rps.output)
+    ? rps.output
+    : (Array.isArray(rps.steps) && rps.steps.length
+      ? Number(rps.steps[rps.steps.length - 1].remain) || 0
+      : Number(rps.input) || 0);
+  const universeSize = Number.isFinite(ctx.result && ctx.result.universeSize)
+    ? ctx.result.universeSize
+    : baseSectionOutput(rps.steps, rps.input);
+
   const dataStats = el('div', { class: 'stats' });
   dataStats.append(el('div', { class: 'stat' }, [
     el('div', { class: 'k', text: 'K线缓存' }),
@@ -311,7 +358,13 @@ export async function renderSettings(root, ctx) {
   if (ctx.result) {
     dataStats.append(el('div', { class: 'stat' }, [
       el('div', { class: 'k', text: '股票池' }),
-      el('div', { class: 'v small', text: fmtInt(ctx.result.poolStats.output) + ' 只' }),
+      el('div', { class: 'v small', text: fmtInt(universeSize) + ' 只' }),
+      el('div', { class: 's', text: '基础过滤后' }),
+    ]));
+    dataStats.append(el('div', { class: 'stat' }, [
+      el('div', { class: 'k', text: '候选标的' }),
+      el('div', { class: 'v small', text: fmtInt(poolOut) + ' 只' }),
+      el('div', { class: 's', text: ctx.result.strategyName || '策略过滤后' }),
     ]));
     dataStats.append(el('div', { class: 'stat' }, [
       el('div', { class: 'k', text: '数据时间' }),
@@ -353,12 +406,14 @@ export async function renderSettings(root, ctx) {
   ]));
   root.append(dataCard);
 
-  /* ---------- 股票池过滤明细 ---------- */
+  /* ---------- 股票池过滤明细（按策略分组） ---------- */
   if (ctx.result && ctx.result.poolStats && ctx.result.poolStats.steps) {
+    const ps = ctx.result.poolStats;
+    const stName = ctx.result.strategyName || '当前策略';
     const filterCard = el('div', { class: 'card' });
     filterCard.append(el('div', { class: 'card-hd' }, [
-      el('div', { class: 'card-title', text: '股票池过滤明细' }),
-      el('div', { class: 'card-sub', text: `最终 ${ctx.result.poolStats.output} 只` }),
+      el('div', { class: 'card-title', text: `股票池过滤明细 · ${stName}` }),
+      el('div', { class: 'card-sub', text: `最终候选 ${fmtInt(poolOut)} 只` }),
     ]));
 
     const tbl = el('table', { class: 'tbl' });
@@ -371,17 +426,71 @@ export async function renderSettings(root, ctx) {
     tb.append(el('tr', {}, [
       el('td', { text: '全市场' }),
       el('td', { class: 'mono dim', text: '--' }),
-      el('td', { class: 'mono', text: fmtInt(ctx.result.poolStats.input) }),
+      el('td', { class: 'mono', text: fmtInt(ps.input) }),
     ]));
-    for (const st of ctx.result.poolStats.steps) {
+
+    let lastSection = '';
+    for (const st of ps.steps) {
+      const sec = st.section || '';
+      if (sec && sec !== lastSection) {
+        lastSection = sec;
+        tb.append(el('tr', { class: 'row-sec' }, [
+          el('td', { colspan: '3', text: sec }),
+        ]));
+      }
+      // removed < 0 表示保底放宽（把门槛撤掉后池子变大），显示成 +N 更直观
+      const delta = st.removed > 0 ? '-' + st.removed
+        : st.removed < 0 ? '+' + (-st.removed) : '0';
       tb.append(el('tr', {}, [
         el('td', { text: st.label }),
-        el('td', { class: 'mono down', text: st.removed > 0 ? '-' + st.removed : '0' }),
+        el('td', {
+          class: 'mono ' + (st.removed > 0 ? 'down' : st.removed < 0 ? 'up' : 'dim'),
+          text: delta,
+        }),
         el('td', { class: 'mono', text: fmtInt(st.remain) }),
       ]));
     }
     tbl.append(tb);
     filterCard.append(tbl);
+
+    // 保底放宽提示
+    if (ctx.result.relaxed) {
+      filterCard.append(el('div', {
+        class: 'disclaimer mt10',
+        text: '本次因满足门槛的标的不足，已自动放宽部分门槛以保证有票可选。'
+          + '这通常出现在普跌或极端缩量行情，此时应降低仓位、谨慎操作。',
+      }));
+    }
+
+    // 四策略初筛候选对比
+    const counts = ctx.result.strategyPoolCounts;
+    if (counts && typeof counts === 'object') {
+      filterCard.append(el('div', { class: 'sec-title mt14', text: '各策略初筛候选数对比' }));
+      const cmp = el('table', { class: 'tbl' });
+      cmp.append(el('thead', {}, [el('tr', {}, [
+        el('th', { text: '策略' }),
+        el('th', { text: '初筛候选' }),
+      ])]));
+      const ctb = el('tbody');
+      for (const [k, v] of Object.entries(STRATEGIES)) {
+        const cur = k === ctx.result.strategy;
+        ctb.append(el('tr', {}, [
+          el('td', {
+            text: v.name + (cur ? '（当前）' : ''),
+            style: cur ? { color: 'var(--accent, #4f8cff)', fontWeight: '600' } : null,
+          }),
+          el('td', { class: 'mono', text: fmtInt(counts[k] || 0) + ' 只' }),
+        ]));
+      }
+      cmp.append(ctb);
+      filterCard.append(cmp);
+      filterCard.append(el('div', {
+        class: 'dim tiny mt10',
+        text: '初筛候选 = 基础池 → 主线门槛 → 该策略的快照级门槛（不含需要 K 线的因子门槛）。'
+          + '切换策略后本表会按该策略重算。',
+      }));
+    }
+
     root.append(filterCard);
   }
 
@@ -396,7 +505,9 @@ export async function renderSettings(root, ctx) {
       '<b>A股每日买入计划</b> · 版本 1.0<br>' +
       '数据来源：东方财富公开行情接口<br>' +
       '运行方式：本地 PWA，数据全部存在手机本地（IndexedDB），不上传任何信息<br>' +
-      '分析范围：沪深 A 股（剔除 ST、退市、停牌、次新、低流动性、创业板），总市值 20 亿–800 亿',
+      '分析范围：沪深 A 股（剔除 ST、退市、停牌、低流动性、创业板），总市值 20 亿–800 亿<br>' +
+      '选股策略：均衡多因子 / 趋势动量 / 超跌反弹 / 龙头战法 —— ' +
+      '每个策略有各自的股票池过滤门槛，明细见上方「股票池过滤明细」',
   }));
 
   about.append(el('div', {

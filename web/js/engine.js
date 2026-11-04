@@ -7,12 +7,16 @@ import {
   fetchQuotes, fetchKlines, ymd, klineQuality, F_SNAP_LITE,
 } from './api.js';
 import {
-  buildUniverse, poolToMap, limitPrices,
+  buildUniverse, poolToMap, limitPrices, cloneStats,
 } from './universe.js';
 import { analyzeMainline, annotatePool, mainlineTrend } from './mainline.js';
 import { analyzeMarket, levelByScore } from './market.js';
 import { computeFactors } from './indicators.js';
-import { scoreCandidates, applyPortfolioConstraints, buildReason } from './strategy.js';
+import {
+  scoreCandidates, applyPortfolioConstraints, buildReason,
+  applyStage1, applyStage2, relaxStage2, computeLeader,
+  STRATEGY_KEYS, getStrategy, strategyFilter,
+} from './strategy.js';
 import { buildDailyPlan } from './plan.js';
 import {
   settingsLoad, snapshotSaveAll, snapshotLoadAll, boardsSaveAll, boardsLoadAll,
@@ -107,8 +111,26 @@ export async function loadAll(opt = {}) {
     text: `主线 ${ml.top.length} 个，过门槛 ${qualified.length} 只`,
   });
 
-  // 6. 拉 K 线（优先按主线分排序，限制上限）
-  const want = qualified.slice(0, KLINE_CAP);
+  // 6. 拉 K 线：四个策略各自的 stage1 候选按配额取样，保证每个策略都有 K 线可用
+  const quota = Math.ceil(KLINE_CAP / STRATEGY_KEYS.length);
+  const wantCodes = new Set();
+  const want = [];
+  for (const k of STRATEGY_KEYS) {
+    for (const s of applyStage1(qualified, k).slice(0, quota)) {
+      if (wantCodes.has(s.code)) continue;
+      wantCodes.add(s.code);
+      want.push(s);
+    }
+  }
+  // 配额没填满（策略池高度重叠）时用主线分补齐，尽量用满 K 线预算
+  if (want.length < KLINE_CAP) {
+    for (const s of qualified) {
+      if (want.length >= KLINE_CAP) break;
+      if (wantCodes.has(s.code)) continue;
+      wantCodes.add(s.code);
+      want.push(s);
+    }
+  }
   const codes = want.map((s) => s.code);
   const cachedRaw = await klinesGetMany(codes);
 
@@ -274,13 +296,28 @@ export function analyze(state, opt = {}) {
   });
   const level = market.level;
 
-  // 2. 主线
+  // 2. 主线（不再提前算龙头度：龙头度依赖 K 线动量，必须等因子合并后再算）
   const ml = state.ml;
   const { qualified, stats: mlStats } = annotatePool(state.pool, ml);
 
-  // 3. 因子
+  // 3. 过滤明细：基础链 → 主线门槛 → 该策略 stage1（快照级门槛）
+  const poolStats = cloneStats(state.poolStats);
+  poolStats.section('主线门槛（所有策略共用）');
+  poolStats.add('属于主线 Top20 且不在退潮', state.pool.length, qualified.length);
+
+  const strategyName = getStrategy(strategy).name;
+  poolStats.section(`${strategyName} · 专属门槛`);
+  const stage1Rows = applyStage1(qualified, strategy, poolStats);
+
+  // 3.5 四个策略的初筛候选规模对比（同一 qualified 集合，仅 stage1，不带统计）
+  const strategyPoolCounts = {};
+  for (const k of STRATEGY_KEYS) {
+    strategyPoolCounts[k] = applyStage1(qualified, k, null).length;
+  }
+
+  // 4. 因子
   const withFactors = [];
-  for (const s of qualified) {
+  for (const s of stage1Rows) {
     const kl = state.klines.get(s.code);
     if (!kl) continue;
     const f = computeFactors(kl);
@@ -289,20 +326,30 @@ export function analyze(state, opt = {}) {
       ...s,
       ...f,
       mainScore: s.mainScore,
+      mainRank: s.mainRank,
     });
   }
 
-  // 4. 打分
-  const scored = scoreCandidates(withFactors, strategy);
+  // 4.5 同行业龙头度：在「本策略 stage1 候选」里做横截面分位。
+  //     口径说明：分位是在同一批强势候选内排的，因此 leader 高 = 这批强势股里的领先者。
+  const withLeader = computeLeader(withFactors);
 
-  // 5. 组合约束
+  // 5. stage2（K 线因子门槛）+ 保底放宽
+  const stage2Rows = applyStage2(withLeader, strategy, poolStats);
+  const filtered = relaxStage2(stage2Rows, withLeader, qualified, poolStats);
+  const finalRows = filtered.rows;
+
+  // 6. 打分（在「过完策略专属门槛」的最终候选上做横截面标准化）
+  const scored = scoreCandidates(finalRows, strategy);
+
+  // 7. 组合约束
   const maxPicks = Math.min(opt.maxPicks || settings.maxPicks || 5, level.picks);
   const picks = applyPortfolioConstraints(scored, maxPicks, {
     maxPerIndustry: 2,
     maxPerBoard: 2,
   });
 
-  // 6. 买入计划
+  // 8. 买入计划
   const plan = buildDailyPlan(picks, {
     capital,
     level,
@@ -315,7 +362,7 @@ export function analyze(state, opt = {}) {
     if (src) it.reason = buildReason(src);
   }
 
-  // 7. 主线趋势
+  // 9. 主线趋势
   const trend = mainlineTrend(ml, []);
 
   return {
@@ -324,9 +371,20 @@ export function analyze(state, opt = {}) {
     level,
     ml,
     mlStats,
-    poolStats: state.poolStats,
+    poolStats,
+    universeSize: state.pool.length,
+    strategyName,
+    strategyPoolCounts,
+    strategyFilters: {
+      key: strategy,
+      name: strategyName,
+      stage1: (strategyFilter(strategy).stage1 || []).map((f) => f.label),
+      stage2: (strategyFilter(strategy).stage2 || []).map((f) => f.label),
+    },
     qualifiedCount: qualified.length,
     factorCount: withFactors.length,
+    candidateCount: finalRows.length,
+    relaxed: filtered.relaxed,
     scored,
     picks,
     plan,

@@ -1,10 +1,17 @@
 /* ============================================================
-   strategy.js — 三策略权重表 + 横截面分位标准化 + 组合约束
+   strategy.js — 四策略定义 + 策略专属股票池过滤 + 打分 + 组合约束
+   ------------------------------------------------------------
+   设计要点：
+   1. 每个策略有自己的「股票池过滤链」（STRATEGY_FILTERS），
+      分 stage1（只用快照字段）/ stage2（需要 K 线因子）两段，
+      从 universe.js 的基础池末端续接，因此四个策略的候选池互不相同。
+   2. 过滤链带保底：若筛完不足 minKeep 只，逐级放宽，绝不给空结果。
+   3. dragon（龙头战法）额外用 leader 因子 —— 同行业相对强度分位。
    ============================================================ */
 
 import { crossSectionNormalize } from './indicators.js';
 
-/** 策略定义：8 因子权重（每行和为 1.0）
+/** 策略定义：因子权重（每行和为 1.0）
  *  reverseKeys 为该策略下「越小越好」的因子；未列出的因子均为「越大越好」。
  */
 export const STRATEGIES = {
@@ -57,30 +64,239 @@ export const STRATEGIES = {
       main: 0.20,
     },
   },
+  dragon: {
+    key: 'dragon',
+    name: '龙头战法',
+    desc: '只在最强主线里买板块龙头：趋势与相对强度优先，要求趋势完好、放量、同板块领先',
+    // 波动率越低越好；动量/趋势/龙头度均为越大越好
+    reverseKeys: ['atrp'],
+    weights: {
+      mom20: 0.15,
+      mom5: 0.10,
+      dd: 0.10,
+      trend: 0.20,
+      rsi: 0.05,
+      atrp: 0.05,
+      vr: 0.10,
+      main: 0.05,
+      leader: 0.20,
+    },
+  },
 };
 
 export function getStrategy(key) {
   return STRATEGIES[key] || STRATEGIES.balanced;
 }
 
+export const STRATEGY_KEYS = Object.keys(STRATEGIES);
+
 /** 需要反向（越小越好）的因子 —— 默认集合（均衡/动量策略使用） */
 export const REVERSE_KEYS = ['rsi', 'atrp'];
 
-/** 因子中文名 */
+/** 因子中文名（中性，不含「反向」；反向标注由 factorLabel 按策略动态拼接） */
 export const FACTOR_LABELS = {
   mom20: '20日动量',
   mom5: '5日动量',
   dd: '距高回撤',
   trend: '趋势强度',
-  rsi: 'RSI(反向)',
-  atrp: '波动率(反向)',
+  rsi: 'RSI',
+  atrp: '波动率',
   vr: '量比',
   main: '主线强度',
+  leader: '板块龙头度',
 };
+
+/** 带策略语境的因子名：该策略下反向的因子补上「(反向)」 */
+export function factorLabel(key, strategyKey) {
+  const base = FACTOR_LABELS[key] || key;
+  const st = getStrategy(strategyKey);
+  return (st.reverseKeys || []).includes(key) ? base + '(反向)' : base;
+}
+
+/* ============================================================
+   策略专属股票池过滤链
+   ------------------------------------------------------------
+   stage1 只用快照字段：amount(成交额,元) / turnover(换手率,%) /
+     volRatio(量比) / mktCap(总市值,元) / chgPct(当日涨幅,%) / price
+   stage2 需要 K 线因子：mom20 / mom5(动量,小数) / dd(距60日高,小数,≤0) /
+     rsi(0~100) / atrp(ATR%,小数) / maAlign(0~3) / vr(量比)
+   约定：字段缺失时一律「放行」（fail-open），避免上游缺数据把池子清空；
+   真正兜底的是 applyStrategyFilters 的 minKeep 逐级放宽。
+   ============================================================ */
+
+const isNum = (v) => typeof v === 'number' && isFinite(v);
+/** 缺失即放行 */
+const ok = (v, fn) => !isNum(v) || fn(v);
+
+export const STRATEGY_FILTERS = {
+  /* 均衡：门槛最宽，覆盖面优先 —— 只要「流动性够、波动不离谱」即可 */
+  balanced: {
+    stage1: [
+      { label: '成交额 ≥ 1.5 亿', test: (s) => ok(s.amount, (v) => v >= 1.5e8) },
+      { label: '换手率 1%~18%', test: (s) => ok(s.turnover, (v) => v >= 1 && v <= 18) },
+      { label: '量比 ≥ 0.8', test: (s) => ok(s.volRatio, (v) => v >= 0.8) },
+      { label: '市值 ≤ 600 亿', test: (s) => ok(s.mktCap, (v) => v <= 600e8) },
+    ],
+    stage2: [
+      { label: '20日动量 > -10%', test: (s) => ok(s.mom20, (v) => v > -0.10) },
+      { label: '均线多头 ≥ 1/3', test: (s) => ok(s.maAlign, (v) => v >= 1) },
+      { label: 'ATR ≤ 12%（波动可控）', test: (s) => ok(s.atrp, (v) => v <= 0.12) },
+    ],
+  },
+
+  /* 趋势动量：只买「已经走强」的 —— 站上均线、当日有量、不追已过热 */
+  momentum: {
+    stage1: [
+      { label: '成交额 ≥ 2 亿', test: (s) => ok(s.amount, (v) => v >= 2e8) },
+      { label: '换手率 ≥ 2%', test: (s) => ok(s.turnover, (v) => v >= 2) },
+      { label: '量比 ≥ 1.0（放量）', test: (s) => ok(s.volRatio, (v) => v >= 1.0) },
+      { label: '当日涨幅 > 0', test: (s) => ok(s.chgPct, (v) => v > 0) },
+      { label: '市值 ≤ 800 亿', test: (s) => ok(s.mktCap, (v) => v <= 800e8) },
+    ],
+    stage2: [
+      { label: '均线多头 = 3/3', test: (s) => isNum(s.maAlign) && s.maAlign >= 3 },
+      { label: '20日动量 > 0', test: (s) => ok(s.mom20, (v) => v > 0) },
+      { label: '距60日高回撤 ≤ 18%', test: (s) => ok(s.dd, (v) => v >= -0.18) },
+      { label: 'RSI ≤ 82（不追过热）', test: (s) => ok(s.rsi, (v) => v <= 82) },
+    ],
+  },
+
+  /* 超跌反弹：只买「跌透且出现异动」的 —— 小盘弹性、跌幅可观、RSI 低 */
+  reversal: {
+    stage1: [
+      { label: '成交额 ≥ 1.2 亿', test: (s) => ok(s.amount, (v) => v >= 1.2e8) },
+      { label: '市值 ≤ 300 亿（小盘弹性）', test: (s) => ok(s.mktCap, (v) => v <= 300e8) },
+      { label: '当日涨幅 -8%~+3%', test: (s) => ok(s.chgPct, (v) => v >= -8 && v <= 3) },
+      { label: '量比 ≥ 0.8', test: (s) => ok(s.volRatio, (v) => v >= 0.8) },
+    ],
+    stage2: [
+      { label: '20日动量 < 0（确实跌过）', test: (s) => ok(s.mom20, (v) => v < 0) },
+      { label: '距60日高回撤 ≥ 15%', test: (s) => ok(s.dd, (v) => v <= -0.15) },
+      { label: 'RSI ≤ 50（超卖区）', test: (s) => ok(s.rsi, (v) => v <= 50) },
+      { label: 'ATR ≤ 15%（不接崩盘股）', test: (s) => ok(s.atrp, (v) => v <= 0.15) },
+    ],
+  },
+
+  /* 龙头战法：先限定在最强主线内部，再要求趋势完好 + 板块内领先 */
+  dragon: {
+    stage1: [
+      { label: '所属主线排名 ≤ 10', test: (s) => ok(s.mainRank, (v) => v <= 10) },
+      { label: '成交额 ≥ 2 亿', test: (s) => ok(s.amount, (v) => v >= 2e8) },
+      { label: '换手率 ≥ 2%', test: (s) => ok(s.turnover, (v) => v >= 2) },
+      { label: '市值 ≤ 800 亿', test: (s) => ok(s.mktCap, (v) => v <= 800e8) },
+    ],
+    stage2: [
+      { label: '同行业龙头度 ≥ 60', test: (s) => ok(s.leader, (v) => v >= 60) },
+      { label: '均线多头 = 3/3', test: (s) => isNum(s.maAlign) && s.maAlign >= 3 },
+      { label: '20日动量 > 0', test: (s) => ok(s.mom20, (v) => v > 0) },
+      { label: '量比 ≥ 1.0（放量）', test: (s) => ok(s.vr, (v) => v >= 1.0) },
+      { label: '距60日高回撤 ≤ 15%', test: (s) => ok(s.dd, (v) => v >= -0.15) },
+    ],
+  },
+};
+
+export function strategyFilter(key) {
+  return STRATEGY_FILTERS[key] || STRATEGY_FILTERS.balanced;
+}
+
+/** 候选不足这个数就逐级放宽过滤，保证任何行情下都能给出推荐 */
+export const STRATEGY_MIN_KEEP = 5;
+
+/**
+ * 计算「同行业龙头度」：在同行业内按 20 日动量与量比做横截面分位，取均值 0~100。
+ * 龙头战法用它区分「板块里最强的那只」与「板块里的跟风股」。
+ * 调用前提：rows 必须已经合并过 K 线因子（mom20 / vr），否则一律中性 50。
+ * 行业成分少于 5 只时不计算（分位无意义），统一给中性 50。
+ * @param {Array} rows 股票数组（需含 code / industry / mom20 / vr）
+ * @returns {Array} 新数组（每只带 leader），不修改入参
+ */
+export function computeLeader(rows) {
+  const groups = new Map();
+  for (const r of rows) {
+    const ind = String(r.industry || '').trim();
+    if (!ind) continue;
+    let g = groups.get(ind);
+    if (!g) { g = []; groups.set(ind, g); }
+    g.push(r);
+  }
+
+  const leaderOf = new Map();
+  for (const [, members] of groups) {
+    if (members.length < 5) continue;
+    const mom = members.map((m) => m.mom20).filter(isNum).sort((a, b) => a - b);
+    const vr = members.map((m) => m.vr).filter(isNum).sort((a, b) => a - b);
+    for (const m of members) {
+      const a = pctRank(mom, m.mom20);
+      const b = pctRank(vr, m.vr);
+      leaderOf.set(m.code, Math.round(((a + b) / 2) * 10) / 10);
+    }
+  }
+
+  return rows.map((r) => ({
+    ...r,
+    leader: leaderOf.has(r.code) ? leaderOf.get(r.code) : 50,
+  }));
+}
+
+/** 升序数组里的百分位（0~100）；缺失返回 50 */
+function pctRank(sorted, v) {
+  const n = sorted.length;
+  if (!n || !isNum(v)) return 50;
+  let lo = 0;
+  let hi = n;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (sorted[mid] < v) lo = mid + 1;
+    else hi = mid;
+  }
+  return n > 1 ? (lo / (n - 1)) * 100 : 50;
+}
+
+/** 依次跑一条过滤链，并把每一步记进 stats */
+export function runFilterChain(rows, filters, stats) {
+  let cur = rows;
+  for (const f of filters || []) {
+    const before = cur.length;
+    cur = cur.filter(f.test);
+    if (stats) stats.add(f.label, before, cur.length);
+  }
+  return cur;
+}
+
+/** 只跑 stage1（快照字段），供 K 线候选选样与「初筛候选」对比使用 */
+export function applyStage1(rows, key, stats) {
+  return runFilterChain(rows, strategyFilter(key).stage1, stats);
+}
+
+/** 只跑 stage2（K 线因子） */
+export function applyStage2(rows, key, stats) {
+  return runFilterChain(rows, strategyFilter(key).stage2, stats);
+}
+
+/**
+ * stage2 保底放宽：因子门槛在极端行情下可能把池子清空。
+ * 依次尝试 stage2 → stage1 → fallback（过主线的全集），取第一个满足 minKeep 的层级，
+ * 并把「放宽」这一步如实记进过滤明细（removed 为负，UI 显示 +N）。
+ * 宁可放宽也不给用户空结果。
+ * @param {Array} stage2Rows 已过 stage2 的结果
+ * @param {Array} stage1Rows 只过 stage1 的结果
+ * @param {Array} fallbackRows 过主线门槛的全集
+ * @returns {{rows:Array, relaxed:null|'stage2'|'stage1'}}
+ */
+export function relaxStage2(stage2Rows, stage1Rows, fallbackRows, stats, opt = {}) {
+  const minKeep = opt.minKeep ?? STRATEGY_MIN_KEEP;
+  if (stage2Rows.length >= minKeep) return { rows: stage2Rows, relaxed: null };
+
+  if (stats) stats.add(`不足 ${minKeep} 只，放宽因子门槛`, stage2Rows.length, stage1Rows.length);
+  if (stage1Rows.length >= minKeep) return { rows: stage1Rows, relaxed: 'stage2' };
+
+  if (stats) stats.add(`仍不足 ${minKeep} 只，放宽策略门槛`, stage1Rows.length, fallbackRows.length);
+  return { rows: fallbackRows, relaxed: 'stage1' };
+}
 
 /**
  * 对候选池做横截面标准化并打分。
- * @param {Array} rows 含 code + 因子字段（mom20/mom5/dd/trend/rsi/atrp/vr/mainScore）
+ * @param {Array} rows 含 code + 因子字段（mom20/mom5/dd/trend/rsi/atrp/vr/mainScore[/leader]）
  * @param {string} strategyKey
  * @returns {Array} 每只带 score 与 factors(0~100)
  */
@@ -89,10 +305,11 @@ export function scoreCandidates(rows, strategyKey = 'balanced') {
   const W = strategy.weights;
   const keys = Object.keys(W);
 
-  // 构造 main 字段别名（mainScore → main）
+  // 构造 main 字段别名（mainScore → main）；leader 缺失时补中性 50
   const prepared = rows.map((r) => ({
     ...r,
     main: isFinite(r.mainScore) ? r.mainScore : 0,
+    leader: isFinite(r.leader) ? r.leader : 50,
   }));
 
   const norm = crossSectionNormalize(prepared, keys, strategy.reverseKeys || REVERSE_KEYS);
@@ -174,7 +391,11 @@ export function buildReason(stock) {
   const f = stock.factors || {};
 
   if (Array.isArray(stock.mainNames) && stock.mainNames.length) {
-    parts.push(`主线：<b>${stock.mainNames.slice(0, 2).join('、')}</b>`);
+    const rk = isFinite(stock.mainRank) && stock.mainRank < 9999 ? `（第 ${stock.mainRank} 强）` : '';
+    parts.push(`主线：<b>${stock.mainNames.slice(0, 2).join('、')}</b>${rk}`);
+  }
+  if (isFinite(stock.leader) && stock.leader >= 75) {
+    parts.push(`同行业龙头度 <b>${stock.leader.toFixed(0)}</b>`);
   }
   if (isFinite(stock.mom20) && stock.mom20 > 0.05) {
     parts.push(`20日动量 <b>+${(stock.mom20 * 100).toFixed(1)}%</b>`);
