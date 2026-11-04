@@ -81,16 +81,33 @@ export function cleanBoards(boards) {
  * 主线分析结果
  * @typedef {object} MainlineResult
  * @property {Array} all      全部有效板块（按分数降序）
- * @property {Array} top      Top20
- * @property {Array} bottom   退潮 Top10
+ * @property {Array} top      TopN（默认 20）
+ * @property {Array} bottom   退潮 TopN（默认 10）
  * @property {Map}   byName   名称 → 板块
  * @property {Set}   topSet   主线板块名集合
  * @property {Set}   bottomSet 退潮板块名集合
+ * @property {object} opt     实际生效的门槛 {topN, bottomN, avoidBottom, on}
  */
-export function analyzeMainline(rawBoards) {
+
+/**
+ * 主线门槛可配置：topN / bottomN / avoidBottom / on 由设置页决定。
+ * 省略 opt 时行为与旧版完全一致（Top20 主线 + 退潮 Top10 剔除）。
+ * @param {Array} rawBoards 板块原始行
+ * @param {object} [opt] { topN, bottomN, avoidBottom, on }
+ */
+export function analyzeMainline(rawBoards, opt = {}) {
   const all = cleanBoards(rawBoards);
-  const top = all.slice(0, TOP_N);
-  const bottom = all.slice(-BOTTOM_N).reverse();
+  const topN = Number.isFinite(opt.topN) && opt.topN > 0 ? Math.floor(opt.topN) : TOP_N;
+  const bottomN = Number.isFinite(opt.bottomN) && opt.bottomN > 0 ? Math.floor(opt.bottomN) : BOTTOM_N;
+  const effective = {
+    on: opt.on !== false,
+    topN,
+    bottomN,
+    avoidBottom: opt.avoidBottom !== false,
+  };
+
+  const top = all.slice(0, topN);
+  const bottom = all.slice(-bottomN).reverse();
 
   const byName = new Map();
   const rankOf = new Map();
@@ -105,7 +122,7 @@ export function analyzeMainline(rawBoards) {
   const scoreMax = all.length ? Math.max(...all.map((b) => b.score)) : 1;
   const scoreMin = all.length ? Math.min(...all.map((b) => b.score)) : 0;
 
-  return { all, top, bottom, byName, rankOf, topSet, bottomSet, scoreMax, scoreMin };
+  return { all, top, bottom, byName, rankOf, topSet, bottomSet, scoreMax, scoreMin, opt: effective };
 }
 
 /**
@@ -149,11 +166,19 @@ export function stockMainline(stock, ml) {
 
   const inTop = matched.some((b) => ml.topSet.has(b.name));
   const inBottom = matched.some((b) => ml.bottomSet.has(b.name));
+  const eff = ml.opt || { on: true, avoidBottom: true };
 
   // 所属最强主线板块在全部有效板块中的排名（1 = 最强）。
   // 龙头战法用它做「必须处在强主线」的硬门槛。
   const best = top3[0];
   const mainRank = best && ml.rankOf ? (ml.rankOf.get(best.name) || 9999) : 9999;
+
+  // 硬门槛：默认必须属于 Top20 主线、且不在退潮 Top10。
+  // 用户可关闭「退潮过滤」，也可整体关掉主线门槛。
+  let qualified;
+  if (eff.on === false) qualified = true;
+  else if (eff.avoidBottom === false) qualified = inTop;
+  else qualified = inTop && !inBottom;
 
   return {
     mainScore,
@@ -163,8 +188,7 @@ export function stockMainline(stock, ml) {
     matchedCount: matched.length,
     inTop,
     inBottom,
-    // 硬门槛：必须属于 Top20 主线，且不在退潮 Top10
-    qualified: inTop && !inBottom,
+    qualified,
   };
 }
 

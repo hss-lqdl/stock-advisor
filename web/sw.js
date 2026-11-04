@@ -15,7 +15,7 @@
             （局域网 http://192.168.x.x 不是 secure context，无法注册）
    ============================================================ */
 
-const VERSION = 'v1.4.0';
+const VERSION = 'v1.5.0';
 const CACHE = 'stock-advisor-' + VERSION;
 
 /* 预缓存清单：App 外壳全部静态资源 */
@@ -28,6 +28,7 @@ const PRECACHE = [
   './js/main.js',
   './js/api.js',
   './js/store.js',
+  './js/filters.js',
   './js/universe.js',
   './js/mainline.js',
   './js/market.js',

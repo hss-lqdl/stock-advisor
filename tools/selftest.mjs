@@ -179,8 +179,208 @@ async function testUniverse() {
 }
 
 /* ============================================================
-   第 2 组：mainline.js 主线情绪
+   第 1.5 组：filters.js 可配置过滤条件
    ============================================================ */
+
+async function testFilters() {
+  const F = await import(url('filters.js'));
+  const U = await import(url('universe.js'));
+  const S = await import(url('strategy.js'));
+  const M = await import(url('mainline.js'));
+  describe('filters.js · 可配置过滤条件');
+
+  /* ---------- 字段注册表 ---------- */
+  eq(F.FILTER_CONFIG_VERSION, 1, '配置版本号为 1');
+  ok(F.FILTER_FIELDS.price && F.FILTER_FIELDS.price.unit === '元', '字段表含 价格(元)');
+  eq(F.FILTER_FIELDS.amount.scale, 1e-8, '成交额换算系数 1e-8（元 → 亿）');
+  eq(F.FILTER_FIELDS.mom20.scale, 100, '动量换算系数 100（小数 → %）');
+  eq(F.FILTER_FIELDS.name.type, 'text', '股票名称为文本字段');
+  ok(F.fieldsByGroup('text').every((f) => f.type === 'text'), 'fieldsByGroup("text") 全为文本字段');
+  ok(F.fieldsByGroup('factor').length >= 8, 'K线因子字段 ≥ 8 个');
+  info('字段总数', Object.keys(F.FILTER_FIELDS).length);
+
+  // ddMag：把「距60日高回撤」转成更直观的「回撤幅度（正数越深）」
+  eq(F.FILTER_FIELDS.ddMag.get({ dd: -0.2 }), 0.2, 'dd=-20% → 回撤幅度 20%');
+  ok(Number.isNaN(F.FILTER_FIELDS.ddMag.get({})), 'dd 缺失 → NaN（后续 fail-open）');
+
+  /* ---------- 运算符表 ---------- */
+  eq(F.OPS.between.arity, 2, 'between 需要两个值');
+  eq(F.OPS['>='].kind, 'num', '>= 是数值运算符');
+  ok(F.opsForField('name').every((o) => o.kind === 'text'), '文本字段只能选文本运算符');
+  ok(F.opsForField('price').every((o) => o.kind === 'num'), '数值字段只能选数值运算符');
+
+  /* ---------- 特殊条件 ---------- */
+  ok(F.SPECIAL_RULES.suspended.locked === true, '停牌条件是必需项（不可关闭）');
+  ok(F.SPECIAL_RULES.chiNext, '存在「排除创业板」特殊条件');
+  ok(F.SPECIAL_RULES.lotCost, '存在「一手成本」特殊条件');
+
+  /* ---------- ruleLabel ---------- */
+  eq(F.ruleLabel({ kind: 'special', special: 'suspended' }), '剔除停牌/无报价',
+    '停牌标签固定为「剔除停牌/无报价」');
+  eq(F.ruleLabel({ kind: 'special', special: 'lotCost' }, { budgetPerStock: 8000 }),
+    '一手成本 ≤ 8000 元', '一手成本标签随预算动态生成');
+  ok(F.ruleLabel({ kind: 'field', field: 'price', op: '>', value: 2 }).includes('2'),
+    '字段规则标签包含阈值');
+
+  /* ---------- evalRule：字段缺失一律放行（fail-open） ---------- */
+  const rule = { kind: 'field', field: 'price', op: '>', value: 2 };
+  ok(F.evalRule(rule, { price: 20 }), '价格 20 > 2 → 通过');
+  ok(!F.evalRule(rule, { price: 1.5 }), '价格 1.5 > 2 → 不通过');
+  ok(F.evalRule(rule, {}), '价格缺失 → 放行（fail-open）');
+  ok(F.evalRule({ ...rule, strict: true }, {}) === false, 'strict 规则价格缺失 → 拦截（fail-closed）');
+
+  /* ---------- runRules 统计 ---------- */
+  const rows = [{ price: 20 }, { price: 1 }, { name: 'x' }];
+  const st = new U.FilterStats();
+  st.setInput(rows.length);
+  const kept = F.runRules(rows, [rule], {}, st);
+  eq(kept.length, 2, 'runRules 保留 2 只（1 只低价被剔除 + 1 只缺失放行）');
+  eq(st.steps.length, 1, 'runRules 写入 1 条统计');
+
+  /* ---------- setRule / removeRule / 合并语义 ---------- */
+  const base = F.resolveFilterConfig(null, {}).base;
+  const turnedOff = F.setRule(base, 'amountMin', { on: false });
+  ok(turnedOff !== base, 'setRule 返回新数组（不原地修改）');
+  ok(base.find((r) => r.id === 'amountMin').on !== false, 'setRule 不影响原数组');
+  ok(turnedOff.find((r) => r.id === 'amountMin').on === false, 'setRule 正确写入 on:false');
+  eq(F.removeRule(turnedOff, 'amountMin').length, base.length - 1,
+    'removeRule 能移除条目（但默认条目会被 mergeList 恢复，见下）');
+
+  const custom = F.makeRule({ field: 'pe', op: '<=', value: 50 });
+  ok(custom.id && custom.custom === true, 'makeRule 生成带 id 的自定义条件');
+  const withCustom = turnedOff.concat([custom]);
+  const merged = F.mergeList(base, withCustom);
+  ok(merged.some((r) => r.id === custom.id), 'mergeList 保留自定义条件');
+  ok(merged.find((r) => r.id === 'amountMin').on === false, 'mergeList 保留用户的关闭状态');
+  eq(merged.length, base.length + 1, 'mergeList 结果 = 默认条目 + 1 条自定义');
+  ok(F.removeRule(merged, custom.id).every((r) => r.id !== custom.id), 'removeRule 删掉自定义条件');
+
+  /* ---------- resolveFilterConfig 迁移与序列化 ---------- */
+  const def = F.resolveFilterConfig(null, {});
+  eq(def.mainline.topN, 20, '默认主线 TopN = 20');
+  ok(def.base.every((r) => r.on !== false), '默认基础条件全部开启');
+  ok(def.strategies.balanced.stage1.length >= 3, '默认策略条件已编译');
+
+  const legacyOff = F.resolveFilterConfig(null, { excludeChiNext: false });
+  ok(legacyOff.base.find((r) => r.id === 'chiNext').on === false,
+    '旧设置 excludeChiNext=false → 创业板条件被关闭（老用户不掉设置）');
+  const legacyCap = F.resolveFilterConfig(null, { minMarketCap: 30, maxMarketCap: 500 });
+  const capRule = legacyCap.base.find((r) => r.id === 'marketCap');
+  eq(capRule.value, 30, '旧设置 minMarketCap 迁移进 marketCap 条件');
+  eq(capRule.value2, 500, '旧设置 maxMarketCap 迁移进 marketCap 条件');
+
+  const json = JSON.parse(JSON.stringify(F.serializeConfig(def)));
+  const back = F.resolveFilterConfig(json, {});
+  eq(back.base.length, def.base.length, '序列化 → 解析后基础条件数量不变');
+  eq(back.strategies.dragon.stage2.length, def.strategies.dragon.stage2.length,
+    '序列化 → 解析后龙头战法因子条件数量不变');
+  ok(F.countRules(def).on > 10, 'countRules 统计已启用条件数 > 10');
+  info('默认启用条件', JSON.stringify(F.countRules(def)));
+
+  /* ---------- 集成：自定义配置真的改变股票池 ---------- */
+  const mk = (code, name, price, chgPct, opts = {}) => ({
+    f12: code, f14: name, f2: price, f3: chgPct,
+    f5: 10000, f6: opts.amount ?? 5e8, f8: opts.turnover ?? 3,
+    f9: 20, f10: 1.2, f15: price * 1.02, f16: price * 0.98, f17: price,
+    f18: price / (1 + chgPct / 100),
+    f20: (opts.cap ?? 100) * 1e8, f21: (opts.cap ?? 100) * 0.8e8,
+    f23: 2, f62: 1e7, f100: '软件开发', f103: '财税数字化,ChatGPT概念',
+  });
+  const pool = [
+    mk('600001', '正常股票', 20, 2),
+    mk('600008', '低成交额', 20, 2, { amount: 5e7 }),
+    mk('300011', '创业板股', 30, 3),
+  ];
+
+  const r0 = U.buildUniverse(pool, { capital: 50000, maxPicks: 5 });
+  eq(r0.pool.length, 1, '默认配置：只剩 1 只（低成交额 + 创业板均被剔除）');
+  ok(r0.filterConfig, 'buildUniverse 返回 filterConfig');
+
+  // 关掉「成交额 ≥ 1 亿」这一条 → 低成交额股票回到池里
+  const cfgA = F.resolveFilterConfig(null, {});
+  cfgA.base = F.setRule(cfgA.base, 'amountMin', { on: false });
+  const rA = U.buildUniverse(pool, { capital: 50000, maxPicks: 5, filterConfig: cfgA });
+  ok(rA.pool.some((s) => s.code === '600008'), '关闭「成交额」条件后，低成交额股票被保留');
+  eq(rA.pool.length, 2, '关闭成交额条件后池为 2 只');
+
+  // 关掉「排除创业板」→ 创业板股票回到池里
+  const cfgB = F.resolveFilterConfig(null, {});
+  cfgB.base.find((r) => r.id === 'chiNext').on = false;
+  const rB = U.buildUniverse(pool, { capital: 50000, maxPicks: 5, filterConfig: cfgB });
+  ok(rB.pool.some((s) => s.code === '300011'), '关闭「排除创业板」条件后创业板被保留');
+
+  // 改阈值：成交额门槛从 1 亿提到 10 亿 → 正常股票也被剔除
+  const cfgC = F.resolveFilterConfig(null, {});
+  cfgC.base = F.setRule(cfgC.base, 'amountMin', { value: 10 });
+  const rC = U.buildUniverse(pool, { capital: 50000, maxPicks: 5, filterConfig: cfgC });
+  eq(rC.pool.length, 0, '把成交额门槛改到 10 亿后，全部被剔除');
+
+  // 关掉市值区间下限
+  const cfgD = F.resolveFilterConfig(null, {});
+  cfgD.base = F.setRule(cfgD.base, 'marketCap', { on: false });
+  const small = [mk('600004', '超小市值', 20, 2, { cap: 10 })];
+  ok(U.buildUniverse(small, { capital: 50000, maxPicks: 5, filterConfig: cfgD })
+    .pool.some((s) => s.code === '600004'), '关闭市值条件后，10 亿小市值股票被保留');
+  ok(!U.buildUniverse(small, { capital: 50000, maxPicks: 5 })
+    .pool.some((s) => s.code === '600004'), '默认市值条件下，10 亿小市值股票被剔除');
+
+  /* ---------- strategy.js：编译式过滤链 ---------- */
+  eq(Object.keys(S.STRATEGY_FILTERS).length, 4, '四个策略的默认过滤链均已编译');
+  ok(typeof S.strategyRules === 'function', 'strategy.js 导出 strategyRules（编辑器用）');
+  const rulesBal = S.strategyRules('balanced', def);
+  ok(Array.isArray(rulesBal.stage1) && rulesBal.stage1.length > 0, 'strategyRules 返回规则对象数组');
+  ok(rulesBal.stage1[0].id, 'strategyRules 返回的是声明式规则（带 id）');
+
+  // 关掉 balanced 的某条 stage1 条件 → 编译结果条目数减少
+  const cfgE = F.resolveFilterConfig(null, {});
+  const firstId = cfgE.strategies.balanced.stage1[0].id;
+  cfgE.strategies.balanced.stage1 = F.setRule(cfgE.strategies.balanced.stage1, firstId, { on: false });
+  const fE = S.strategyFilter('balanced', cfgE, { budgetPerStock: 8000, topN: 20 });
+  eq(fE.stage1.length, S.STRATEGY_FILTERS.balanced.stage1.length - 1,
+    '关闭一条 stage1 条件后，编译出的过滤链少一条');
+
+  // 改阈值真的影响筛选结果
+  const cfgF = F.resolveFilterConfig(null, {});
+  const priceRule = { kind: 'field', field: 'price', op: '>', value: 100, id: 'x1', on: true, custom: true };
+  const fF = S.strategyFilter('balanced', cfgF, {});
+  ok(fF.stage1.every((f) => typeof f.test === 'function'), '编译结果每项都有 test 函数');
+  ok(F.evalRule(priceRule, { price: 50 }) === false, '阈值 100 时 50 元不通过');
+  void fF;
+
+  /* ---------- mainline.js：主线门槛参数化 ---------- */
+  // 构造 30 个有效板块（f104/f105 = 上涨/下跌家数，需 ≥ MIN_MEMBERS；f3 = 涨幅；f62 = 主力净流入）
+  const boards = [];
+  for (let i = 1; i <= 30; i++) {
+    boards.push({
+      f14: '板块' + i, f12: 'BK' + i,
+      f3: (30 - i) * 0.5, f62: 1e9 - i * 1e7,
+      f104: 25 - i * 0.2, f105: 5 + i * 0.2,
+    });
+  }
+  const ml20 = M.analyzeMainline(boards);
+  eq(ml20.all.length, 30, 'analyzeMainline 保留 30 个有效板块');
+  eq(ml20.opt.topN, 20, 'analyzeMainline 默认 topN=20');
+  const ml5 = M.analyzeMainline(boards, { topN: 5, bottomN: 3 });
+  eq(ml5.opt.topN, 5, 'analyzeMainline 可自定义 topN');
+  eq(ml5.top.length, 5, 'topN=5 时主线只有 5 个板块');
+  const mlOff = M.analyzeMainline(boards, { on: false });
+  eq(mlOff.opt.on, false, 'analyzeMainline 可关闭主线门槛');
+
+  // stockMainline：关闭退潮剔除后，处于末位板块的股票也能合格
+  const tail = { code: '600001', name: '张三', industry: '板块30', concepts: '' };
+  const mlA = M.analyzeMainline(boards, { topN: 5, bottomN: 3 });
+  const q1 = M.stockMainline(tail, mlA);
+  ok(!q1.qualified, '末位板块股票在默认设置下不合格');
+  const mlB = M.analyzeMainline(boards, { topN: 30, bottomN: 3, avoidBottom: false });
+  const q2 = M.stockMainline(tail, mlB);
+  ok(q2.qualified, '关闭退潮剔除 + topN=30 后，末位板块股票合格');
+
+  /* ---------- engine.js：rebuildPool 存在 ---------- */
+  const E = await import(url('engine.js'));
+  eq(typeof E.rebuildPool, 'function', 'engine.js 导出 rebuildPool（改条件后无需联网重算）');
+}
+
+
 
 async function testMainline() {
   const M = await import(url('mainline.js'));
@@ -1286,6 +1486,7 @@ async function main() {
 
   try {
     await testUniverse();
+    await testFilters();
     await testMainline();
     await testIndicators();
     await testMarket();

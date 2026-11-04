@@ -455,6 +455,54 @@ body { min-height: 100vh; min-height: 100dvh; }
 }
 .switch.on { background: var(--blue); }
 .switch.on::after { transform: translateX(19px); }
+.switch.is-locked { opacity: .55; cursor: default; }
+
+/* ---------------- 过滤条件编辑器 ---------------- */
+.rule-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; margin-bottom: 4px;
+}
+.rule-bar .select { flex: 1 1 auto; min-width: 0; }
+.rule-bar .btn { flex: 0 0 auto; }
+
+.select-sm { padding: 8px 10px; font-size: 13px; padding-right: 30px; }
+.select-xs { padding: 5px 8px; font-size: 12.5px; padding-right: 26px; border-radius: 8px; }
+.input-xs {
+  padding: 5px 8px; font-size: 13px; width: 78px; flex: 0 0 auto;
+  border-radius: 8px; text-align: right;
+}
+.input-xs.grow { flex: 1 1 60px; width: auto; min-width: 0; text-align: left; }
+.btn-xs { padding: 5px 9px; font-size: 12px; border-radius: 8px; }
+.btn.rule-del { color: var(--down); border-color: rgba(34,197,94,.35); }
+
+.rule-sec { margin-top: 16px; }
+.rule-sec-hd {
+  padding-bottom: 7px; margin-bottom: 2px;
+  border-bottom: 1px solid var(--line);
+}
+.rule-sec-hd .t { font-size: 13px; font-weight: 700; color: var(--txt); }
+.rule-sec-hd .s { font-size: 11.5px; color: var(--txt-3); margin-top: 3px; line-height: 1.5; }
+
+.rule-rows { display: flex; flex-direction: column; }
+.rule-row {
+  display: flex; align-items: center; gap: 9px;
+  padding: 9px 0; border-bottom: 1px solid var(--line);
+}
+.rule-rows .rule-row:last-child { border-bottom: none; }
+.rule-row.is-off { opacity: .45; }
+.rule-sw { flex: 0 0 auto; }
+.rule-sw .switch { width: 38px; height: 22px; }
+.rule-sw .switch::after { width: 16px; height: 16px; }
+.rule-sw .switch.on::after { transform: translateX(16px); }
+.rule-main { flex: 1 1 auto; min-width: 0; }
+.rule-main .lbl { font-size: 12.5px; line-height: 1.45; word-break: break-word; }
+.rule-main .sub { font-size: 11px; color: var(--txt-3); margin-top: 2px; }
+.rule-ctrl {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 5px;
+  font-size: 12.5px; color: var(--txt-2);
+}
+.rule-op { color: var(--txt-3); font-size: 12.5px; }
+.rule-unit { color: var(--txt-3); font-size: 11.5px; }
 
 /* ---------------- 底部 TabBar ---------------- */
 #tabbar {

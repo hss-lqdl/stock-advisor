@@ -5,7 +5,7 @@
    ============================================================ */
 
 import { fetchIndexes, fetchQuotes, ymd } from './api.js';
-import { loadAll, refreshPoolOnly, analyze, marketPhase, msToTail } from './engine.js';
+import { loadAll, refreshPoolOnly, analyze, rebuildPool, marketPhase, msToTail } from './engine.js';
 import { settingsLoad, metaGet, metaSet, klinesGet } from './store.js';
 import { computeFactors } from './indicators.js';
 import {
@@ -263,10 +263,16 @@ function render() {
 }
 
 /** 仅重算（不重新拉网络数据）：改本金/策略后调用 */
-function reanalyze() {
+async function reanalyze() {
   if (!S.state) { reload({}); return; }
   try {
-    S.result = analyze(S.state, { settings: S.settings || {} });
+    // 关键：设置可能刚在设置页被改过（过滤条件/策略/本金），必须重新读一次，
+    // 否则会拿启动时缓存的旧设置重算，改了过滤条件却看不到变化。
+    S.settings = await settingsLoad();
+    if (S.state.rows && S.state.rows.length) {
+      S.state = rebuildPool(S.state, S.settings);
+    }
+    S.result = analyze(S.state, { settings: S.settings });
     saveSlim();
     render();
     updateBadge();

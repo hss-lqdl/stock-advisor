@@ -86,8 +86,9 @@ stock_advisor/
 
 | 模块 | 行数 | 职责 | 主要导出 |
 |---|---|---|---|
-| `universe.js` | 183 | 股票池 10 道过滤 | `buildUniverse(rows, cfg)` → `{pool, stats}`；`FilterStats` `normalizeStock` `isST` `isSuspended` `limitPct` `limitPrices` `isStarOrGem` `marketOf` `poolToMap` |
-| `mainline.js` | 224 | 近一周主线情绪（板块清洗 + 打分 + 个股归属） | `analyzeMainline` `cleanBoards` `boardScore` `stockMainline` `annotatePool` `mainlineTrend`；常量 `NOISE_PATTERN` `MIN_MEMBERS` `TOP_N` `BOTTOM_N` |
+| `universe.js` | 画像 ~180 | 股票池基础过滤（11 道，规则来自 `filters.js`） | `buildUniverse(rows, cfg)` → `{pool, stats, budgetPerStock, filterConfig}`；`FilterStats` `cloneStats` `normalizeStock` `poolToMap` `limitPrices` `isStarOrGem`；再导出 `filters.js` 的 `isST` `isSuspended` `limitPct` `marketOf` `ruleLabel` `isChiNext`（保持既有 import 路径可用） |
+| `filters.js` | ~591 | **可配置过滤条件**：字段注册表 + 运算符表 + 特殊条件 + 规则求值 + 序列化/合并（零依赖，纯数据 + 纯函数） | `FILTER_FIELDS` `fieldsByGroup` `OPS` `opsForField` `SPECIAL_RULES` `BASE_RULE_DEFAULTS` `MAINLINE_DEFAULTS` `STAGE_RULE_DEFAULTS` `ruleLabel` `evalRule` `runRules` `cloneRule/cloneList/mergeList` `makeRule` `setRule` `upsertRule` `removeRule` `serializeConfig` `resolveFilterConfig` `countRules` `limitPct` `isST` `isSuspended` `marketOf` `isChiNext` `isLimitUp` `isLimitDown`；常量 `FILTER_CONFIG_VERSION` |
+| `mainline.js` | 224 | 近一周主线情绪（板块清洗 + 打分 + 个股归属），主线门槛可参数化 | `analyzeMainline(boards, opt)`（`opt` = `{topN, bottomN, avoidBottom, on}`）`cleanBoards` `boardScore` `stockMainline` `annotatePool` `mainlineTrend`；常量 `NOISE_PATTERN` `MIN_MEMBERS` `TOP_N` `BOTTOM_N` |
 | `market.js` | 235 | 大盘四维打分（趋势 30 / 广度 25 / 情绪 25 / 量能 20）→ 档位 | `analyzeMarket` `trendScore` `breadthScore` `sentimentScore` `volumeScore` `levelByScore` `budgetPerStock`；常量 `LEVELS` |
 | `indicators.js` | 225 | 8 个技术因子 + 标准化 | `computeFactors` `maAt` `maSeries` `rsiAt` `atrAt` `momentum` `drawdownFromHigh` `volumeRatio` `slopePct` `percentileRank` `crossSectionNormalize` |
 | `strategy.js` | 190 | 分位标准化 + 加权打分 + 组合约束 | `scoreCandidates` `applyPortfolioConstraints` `buildReason` `getStrategy`；常量 `STRATEGIES` `REVERSE_KEYS` `FACTOR_LABELS` |

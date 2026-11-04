@@ -1,38 +1,21 @@
 /* ============================================================
-   universe.js — 全市场快照 → 股票池过滤（基础链 10 道，所有策略共用）
-   策略专属过滤在 strategy.js，从本链末端续接
+   universe.js — 全市场快照 → 股票池过滤（基础链，所有策略共用）
+   ------------------------------------------------------------
+   基础过滤条件已「数据化」：默认值见 filters.js 的 BASE_RULE_DEFAULTS，
+   用户可在设置页逐条开关 / 改阈值 / 追加自定义条件，
+   保存进 settings.filterConfig，由 resolveFilterConfig 解析后在这里执行。
+   策略专属过滤在 strategy.js，从本链末端续接。
    全部已用真实数据实测
    ============================================================ */
 
 import { DEFAULT_SETTINGS } from './store.js';
+import {
+  resolveFilterConfig, runRules, ruleLabel, isST, isSuspended, marketOf,
+  limitPct, isChiNext,
+} from './filters.js';
 
-/* 涨停幅度按代码前缀区分：300/301/688 = 20%，其余 10% */
-export function limitPct(code) {
-  const c = String(code);
-  if (c.startsWith('300') || c.startsWith('301') || c.startsWith('688')) return 0.20;
-  return 0.10;
-}
-
-/** 是否是 ST / 退市 / 风险警示股 */
-export function isST(name) {
-  const n = String(name || '');
-  return /ST|退|\*/.test(n);
-}
-
-/** 是否停牌（f2 返回字符串 "-"） */
-export function isSuspended(row) {
-  return typeof row.f2 !== 'number' || !isFinite(row.f2);
-}
-
-/** 代码所属市场标签 */
-export function marketOf(code) {
-  const c = String(code);
-  if (c.startsWith('688')) return '科创板';
-  if (c.startsWith('300') || c.startsWith('301')) return '创业板';
-  if (c.startsWith('6')) return '沪市';
-  if (c.startsWith('0')) return '深市';
-  return '其他';
-}
+// 以下判定统一由 filters.js 提供，这里原样转出，保持既有 import 路径可用
+export { limitPct, isST, isSuspended, marketOf };
 
 /** 一行快照 → 标准化的股票对象 */
 export function normalizeStock(row) {
@@ -115,8 +98,8 @@ export function cloneStats(stats) {
 /**
  * 构建股票池。
  * @param {Array} rawRows  快照原始行
- * @param {object} settings 设置（本金等）
- * @returns {{ pool: Array, stats: FilterStats }}
+ * @param {object} settings 设置（本金 / 只数 / filterConfig）
+ * @returns {{ pool: Array, stats: FilterStats, budgetPerStock: number, filterConfig: object }}
  */
 export function buildUniverse(rawRows, settings = {}) {
   const cfg = { ...DEFAULT_SETTINGS, ...settings };
@@ -125,7 +108,15 @@ export function buildUniverse(rawRows, settings = {}) {
   stats.setInput(rows.length);
   stats.section('基础过滤（所有策略共用）');
 
-  // 标准化 + 剔除停牌（f2 为字符串 "-"）
+  // 用户可配置的基础过滤链（默认值与顺序见 filters.js 的 BASE_RULE_DEFAULTS）
+  const filterConfig = resolveFilterConfig(cfg.filterConfig, cfg);
+
+  // 单只预算按「进攻档 80% 仓位 / 最多 N 只」的宽松上限估算，
+  // 实际下单时再按当日档位精确计算。科创板（688）一手至少 200 股。
+  const budgetPerStock = (cfg.capital * 0.80) / Math.max(1, cfg.maxPicks);
+  const ctx = { budgetPerStock, topN: filterConfig.mainline.topN };
+
+  // 1. 标准化（停牌 / 无报价的行无法标准化，必须先剔除且不可关闭）
   let cur = [];
   for (const r of rows) {
     if (!r || !r.f12) continue;
@@ -134,91 +125,10 @@ export function buildUniverse(rawRows, settings = {}) {
   }
   stats.add('剔除停牌/无报价', rows.length, cur.length);
 
-  // 1. 非 ST / 非退市
-  let before = cur.length;
-  cur = cur.filter((s) => s.name && !isST(s.name));
-  stats.add('剔除 ST / 退市', before, cur.length);
+  // 2. 逐条跑用户配置的基础过滤条件
+  cur = runRules(cur, filterConfig.base, ctx, stats);
 
-  // 2. 价格 > 2 元
-  before = cur.length;
-  cur = cur.filter((s) => isFinite(s.price) && s.price > 2);
-  stats.add('剔除价格 ≤ 2 元', before, cur.length);
-
-  // 3. 市值区间 20亿 ~ 800亿（总市值 f20）
-  before = cur.length;
-  const minCap = cfg.minMarketCap * 1e8;
-  const maxCap = cfg.maxMarketCap * 1e8;
-  cur = cur.filter((s) => isFinite(s.mktCap) && s.mktCap >= minCap && s.mktCap <= maxCap);
-  stats.add(`市值 ${cfg.minMarketCap}亿~${cfg.maxMarketCap}亿`, before, cur.length);
-
-  // 4. 成交额 ≥ 1 亿
-  before = cur.length;
-  cur = cur.filter((s) => isFinite(s.amount) && s.amount >= 1e8);
-  stats.add('成交额 ≥ 1 亿', before, cur.length);
-
-  // 5. 换手率 ≥ 0.5%
-  before = cur.length;
-  cur = cur.filter((s) => isFinite(s.turnover) && s.turnover >= 0.5);
-  stats.add('换手率 ≥ 0.5%', before, cur.length);
-
-  // 6. 剔除当日已涨停 / 一字板（买不进）
-  before = cur.length;
-  cur = cur.filter((s) => {
-    if (!isFinite(s.chgPct) || !isFinite(s.prevClose)) return true;
-    const lim = limitPct(s.code) * 100;
-    // 涨幅接近涨停（留 0.3% 余量）
-    if (s.chgPct >= lim - 0.3) return false;
-    // 一字板：开=高=低=收 且涨幅接近涨停
-    if (isFinite(s.open) && isFinite(s.high) && isFinite(s.low)) {
-      const oneWord = Math.abs(s.open - s.high) < 1e-6 &&
-                      Math.abs(s.high - s.low) < 1e-6 &&
-                      s.chgPct >= lim - 0.5;
-      if (oneWord) return false;
-    }
-    return true;
-  });
-  stats.add('剔除涨停/一字板', before, cur.length);
-
-  // 7. 剔除跌停（卖出流动性差，且通常有雷）
-  before = cur.length;
-  cur = cur.filter((s) => {
-    if (!isFinite(s.chgPct)) return true;
-    const lim = limitPct(s.code) * 100;
-    return s.chgPct > -(lim - 0.3);
-  });
-  stats.add('剔除跌停', before, cur.length);
-
-  // 7.5 剔除创业板（300/301 开头）—— 用户要求不选创业板股票
-  if (cfg.excludeChiNext) {
-    before = cur.length;
-    cur = cur.filter((s) => {
-      const c = s.code;
-      return !(c.startsWith('300') || c.startsWith('301'));
-    });
-    stats.add('剔除创业板', before, cur.length);
-  }
-
-  // 8. 一手成本 ≤ 单只预算（关键：5万本金下必须能买得起）
-  //    单只预算按「进攻档 80% 仓位 / 最多 5 只」的宽松上限估算，
-  //    实际下单时再按当日档位精确计算。科创板（688开头）一手至少 200 股。
-  const budgetPerStock = (cfg.capital * 0.80) / Math.max(1, cfg.maxPicks);
-  before = cur.length;
-  cur = cur.filter((s) => {
-    if (!isFinite(s.price)) return false;
-    const lotSize = String(s.code).startsWith('688') ? 200 : 100;
-    return s.price * lotSize <= budgetPerStock;
-  });
-  stats.add(`一手成本 ≤ ${Math.round(budgetPerStock)} 元`, before, cur.length);
-
-  // 9. 剔除北交所 / 非沪深标的（范围已由 fs 限制，这里兜底）
-  before = cur.length;
-  cur = cur.filter((s) => {
-    const c = s.code;
-    return c.startsWith('6') || c.startsWith('0') || c.startsWith('3');
-  });
-  stats.add('仅保留沪深标的', before, cur.length);
-
-  return { pool: cur, stats, budgetPerStock };
+  return { pool: cur, stats, budgetPerStock, filterConfig };
 }
 
 /** 把池子转成 Map 便于查找 */
@@ -241,3 +151,6 @@ export function limitPrices(prevClose, code) {
   const dn = Math.round(prevClose * (1 - lim) * 100) / 100;
   return { up, dn, lim };
 }
+
+/** 单条基础规则的可读标签（设置页预览用，避免重复实现） */
+export { ruleLabel, isChiNext };

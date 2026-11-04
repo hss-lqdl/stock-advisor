@@ -61,7 +61,7 @@ boot()
      └─ engine.loadAll({settings, onProgress})
          ├─ api.fetchSnapshot()         56 分页并发，5400+ 只
          ├─ api.fetchBoards()           概念 516 + 行业 496
-         ├─ universe.buildUniverse()    ★ 基础过滤 10 道 → pool
+         ├─ universe.buildUniverse()    ★ 基础过滤 11 道（可配置）→ pool
          ├─ mainline.analyzeMainline()  板块清洗 + 打分 → Top20/退潮10
          ├─ mainline.annotatePool()     给每只票挂主线得分 + mainRank
          ├─ api.fetchLimitPool()        涨停/跌停池
@@ -133,7 +133,7 @@ boot()
 
 ### 4.2.1 股票池三段式过滤体系
 每种选股策略拥有专属的过滤链与明细展示：
-1. **基础过滤（共用 10 道）**：停牌 → ST/退市 → 低价 ≤2 元 → 市值不在 [min,max] → 成交额 <1 亿 → 换手率 <0.5% → 涨停/一字板 → 跌停 → 创业板（可关） → 一手成本超预算。
+1. **基础过滤（共用 11 道，可配置）**：停牌 → ST/退市 → 低价 ≤2 元 → 市值不在 [min,max] → 成交额 <1 亿 → 换手率 <0.5% → 涨停/一字板 → 跌停 → 创业板（可关） → 一手成本超预算。
 2. **主线门槛（共用）**：所属板块入围近一周主线 Top20 且非退潮 Top10。
 3. **策略专属门槛（`strategy.js` `STRATEGY_FILTERS`）**：
    - Stage 1（快照初筛）：按策略特质过滤成交额、换手、量比、市值及主线排名；
@@ -204,12 +204,12 @@ boot()
 
 三层，全部不需要人工点界面：
 
-1. **离线单元**（`node tools/selftest.mjs`，465 项）：纯函数断言，覆盖 10 道基础过滤、
+1. **离线单元**（`node tools/selftest.mjs`，531 项）：纯函数断言，覆盖 10 道基础过滤、
    四套策略专属门槛（Stage1/Stage2）与保底放宽、主线打分、四维打分、9 个因子、分位标准化、
    委托价/股数/止损止盈/费用、条件单文本、K 线解析。
-2. **联网全链路**（`--live`，465~500 项）：真实拉东财数据跑完整链路，打印当日推荐供人工核对。
+2. **联网全链路**（`--live`，531~570 项）：真实拉东财数据跑完整链路，打印当日推荐供人工核对。
    **上游限流时会主动跳过依赖它的断言并说明原因**，这是刻意设计，不是掩盖失败。
-3. **真浏览器 E2E**（`tools/e2e-browser.mjs --live`，44~47 项）：iPhone 14 Pro 视口，5 个 Tab 渲染、
+3. **真浏览器 E2E**（`tools/e2e-browser.mjs --live`，60 项）：iPhone 14 Pro 视口，5 个 Tab 渲染、
    manifest/图标/SW/IndexedDB、四策略选项与过滤明细分组、详情弹层、无横向溢出、深色主题、无页面异常。
    也可加 `--url https://hss-lqdl.github.io/stock-advisor/` 直接对线上站点跑。
 

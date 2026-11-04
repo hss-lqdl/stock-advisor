@@ -10,6 +10,7 @@
    ============================================================ */
 
 import { crossSectionNormalize } from './indicators.js';
+import { resolveFilterConfig, ruleLabel, evalRule } from './filters.js';
 
 /** 策略定义：因子权重（每行和为 1.0）
  *  reverseKeys 为该策略下「越小越好」的因子；未列出的因子均为「越大越好」。
@@ -128,75 +129,67 @@ const isNum = (v) => typeof v === 'number' && isFinite(v);
 /** 缺失即放行 */
 const ok = (v, fn) => !isNum(v) || fn(v);
 
+/** 默认上下文：单只预算按 5 万本金 / 最多 5 只 / 进攻档 80% 仓位估算 */
+const DEFAULT_CTX = { budgetPerStock: 8000, topN: 20 };
+
+/** 默认配置（单一定义源：filters.js 的 STAGE_RULE_DEFAULTS） */
+const DEFAULT_FILTER_CFG = resolveFilterConfig(null, {});
+
+/** 把声明式规则编译成旧的 {label, test} 形式，runFilterChain 直接可用 */
+function rulesToFilters(rules, ctx) {
+  const c = ctx || DEFAULT_CTX;
+  return (rules || [])
+    .filter((r) => r.on !== false)
+    .map((r) => ({ label: ruleLabel(r, c), test: (s) => evalRule(r, s, c) }));
+}
+
+function compileDefaults(key) {
+  const list = DEFAULT_FILTER_CFG.strategies[key] || DEFAULT_FILTER_CFG.strategies.balanced;
+  return {
+    stage1: rulesToFilters(list.stage1, DEFAULT_CTX),
+    stage2: rulesToFilters(list.stage2, DEFAULT_CTX),
+  };
+}
+
+/**
+ * 各策略「默认」专属过滤链（由 filters.js 的默认规则编译而来）。
+ * 保持 {stage1:[{label,test}], stage2:[...]} 的既有形状，供自测与外部读取。
+ * 用户改过设置后，实际生效的是 strategyFilter(key, filterConfig, ctx) 的返回值。
+ */
 export const STRATEGY_FILTERS = {
-  /* 均衡：门槛最宽，覆盖面优先 —— 只要「流动性够、波动不离谱」即可 */
-  balanced: {
-    stage1: [
-      { label: '成交额 ≥ 1.5 亿', test: (s) => ok(s.amount, (v) => v >= 1.5e8) },
-      { label: '换手率 1%~18%', test: (s) => ok(s.turnover, (v) => v >= 1 && v <= 18) },
-      { label: '量比 ≥ 0.8', test: (s) => ok(s.volRatio, (v) => v >= 0.8) },
-      { label: '市值 ≤ 600 亿', test: (s) => ok(s.mktCap, (v) => v <= 600e8) },
-    ],
-    stage2: [
-      { label: '20日动量 > -10%', test: (s) => ok(s.mom20, (v) => v > -0.10) },
-      { label: '均线多头 ≥ 1/3', test: (s) => ok(s.maAlign, (v) => v >= 1) },
-      { label: 'ATR ≤ 12%（波动可控）', test: (s) => ok(s.atrp, (v) => v <= 0.12) },
-    ],
-  },
-
-  /* 趋势动量：只买「已经走强」的 —— 站上均线、当日有量、不追已过热 */
-  momentum: {
-    stage1: [
-      { label: '成交额 ≥ 2 亿', test: (s) => ok(s.amount, (v) => v >= 2e8) },
-      { label: '换手率 ≥ 2%', test: (s) => ok(s.turnover, (v) => v >= 2) },
-      { label: '量比 ≥ 1.0（放量）', test: (s) => ok(s.volRatio, (v) => v >= 1.0) },
-      { label: '当日涨幅 > 0', test: (s) => ok(s.chgPct, (v) => v > 0) },
-      { label: '市值 ≤ 800 亿', test: (s) => ok(s.mktCap, (v) => v <= 800e8) },
-    ],
-    stage2: [
-      { label: '均线多头 = 3/3', test: (s) => isNum(s.maAlign) && s.maAlign >= 3 },
-      { label: '20日动量 > 0', test: (s) => ok(s.mom20, (v) => v > 0) },
-      { label: '距60日高回撤 ≤ 18%', test: (s) => ok(s.dd, (v) => v >= -0.18) },
-      { label: 'RSI ≤ 82（不追过热）', test: (s) => ok(s.rsi, (v) => v <= 82) },
-    ],
-  },
-
-  /* 超跌反弹：只买「跌透且出现异动」的 —— 小盘弹性、跌幅可观、RSI 低 */
-  reversal: {
-    stage1: [
-      { label: '成交额 ≥ 1.2 亿', test: (s) => ok(s.amount, (v) => v >= 1.2e8) },
-      { label: '市值 ≤ 300 亿（小盘弹性）', test: (s) => ok(s.mktCap, (v) => v <= 300e8) },
-      { label: '当日涨幅 -8%~+3%', test: (s) => ok(s.chgPct, (v) => v >= -8 && v <= 3) },
-      { label: '量比 ≥ 0.8', test: (s) => ok(s.volRatio, (v) => v >= 0.8) },
-    ],
-    stage2: [
-      { label: '20日动量 < 0（确实跌过）', test: (s) => ok(s.mom20, (v) => v < 0) },
-      { label: '距60日高回撤 ≥ 15%', test: (s) => ok(s.dd, (v) => v <= -0.15) },
-      { label: 'RSI ≤ 50（超卖区）', test: (s) => ok(s.rsi, (v) => v <= 50) },
-      { label: 'ATR ≤ 15%（不接崩盘股）', test: (s) => ok(s.atrp, (v) => v <= 0.15) },
-    ],
-  },
-
-  /* 龙头战法：先限定在最强主线内部，再要求趋势完好 + 板块内领先 */
-  dragon: {
-    stage1: [
-      { label: '所属主线排名 ≤ 10', test: (s) => ok(s.mainRank, (v) => v <= 10) },
-      { label: '成交额 ≥ 2 亿', test: (s) => ok(s.amount, (v) => v >= 2e8) },
-      { label: '换手率 ≥ 2%', test: (s) => ok(s.turnover, (v) => v >= 2) },
-      { label: '市值 ≤ 800 亿', test: (s) => ok(s.mktCap, (v) => v <= 800e8) },
-    ],
-    stage2: [
-      { label: '同行业龙头度 ≥ 60', test: (s) => ok(s.leader, (v) => v >= 60) },
-      { label: '均线多头 = 3/3', test: (s) => isNum(s.maAlign) && s.maAlign >= 3 },
-      { label: '20日动量 > 0', test: (s) => ok(s.mom20, (v) => v > 0) },
-      { label: '量比 ≥ 1.0（放量）', test: (s) => ok(s.vr, (v) => v >= 1.0) },
-      { label: '距60日高回撤 ≤ 15%', test: (s) => ok(s.dd, (v) => v >= -0.15) },
-    ],
-  },
+  balanced: compileDefaults('balanced'),
+  momentum: compileDefaults('momentum'),
+  reversal: compileDefaults('reversal'),
+  dragon: compileDefaults('dragon'),
 };
 
-export function strategyFilter(key) {
-  return STRATEGY_FILTERS[key] || STRATEGY_FILTERS.balanced;
+/**
+ * 取某策略的专属过滤链。
+ * @param {string} key 策略 key
+ * @param {object} [cfg] 已解析的 filterConfig（filters.js resolveFilterConfig 的输出）；
+ *                       省略时返回代码默认值，与旧行为完全一致
+ * @param {object} [ctx] { budgetPerStock, topN }
+ * @returns {{stage1:Array, stage2:Array}} 每项为 {label, test}
+ */
+export function strategyFilter(key, cfg, ctx) {
+  const k = STRATEGY_FILTERS[key] ? key : 'balanced';
+  if (!cfg || !cfg.strategies) return STRATEGY_FILTERS[k];
+  const list = cfg.strategies[k] || cfg.strategies.balanced;
+  if (!list) return STRATEGY_FILTERS[k];
+  const c = ctx || DEFAULT_CTX;
+  return {
+    stage1: rulesToFilters(list.stage1, c),
+    stage2: rulesToFilters(list.stage2, c),
+  };
+}
+
+/** 某策略当前生效的规则清单（设置页编辑器用，返回规则对象而非编译后的闭包） */
+export function strategyRules(key, cfg) {
+  const k = STRATEGY_FILTERS[key] ? key : 'balanced';
+  const src = cfg && cfg.strategies ? cfg.strategies[k] || cfg.strategies.balanced : null;
+  const fallback = DEFAULT_FILTER_CFG.strategies[k] || DEFAULT_FILTER_CFG.strategies.balanced;
+  const list = src || fallback;
+  return { stage1: list.stage1 || [], stage2: list.stage2 || [] };
 }
 
 /** 候选不足这个数就逐级放宽过滤，保证任何行情下都能给出推荐 */
@@ -264,13 +257,13 @@ export function runFilterChain(rows, filters, stats) {
 }
 
 /** 只跑 stage1（快照字段），供 K 线候选选样与「初筛候选」对比使用 */
-export function applyStage1(rows, key, stats) {
-  return runFilterChain(rows, strategyFilter(key).stage1, stats);
+export function applyStage1(rows, key, stats, cfg, ctx) {
+  return runFilterChain(rows, strategyFilter(key, cfg, ctx).stage1, stats);
 }
 
 /** 只跑 stage2（K 线因子） */
-export function applyStage2(rows, key, stats) {
-  return runFilterChain(rows, strategyFilter(key).stage2, stats);
+export function applyStage2(rows, key, stats, cfg, ctx) {
+  return runFilterChain(rows, strategyFilter(key, cfg, ctx).stage2, stats);
 }
 
 /**

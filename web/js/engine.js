@@ -10,6 +10,7 @@ import {
   buildUniverse, poolToMap, limitPrices, cloneStats,
 } from './universe.js';
 import { analyzeMainline, annotatePool, mainlineTrend } from './mainline.js';
+import { resolveFilterConfig } from './filters.js';
 import { analyzeMarket, levelByScore } from './market.js';
 import { computeFactors } from './indicators.js';
 import {
@@ -99,12 +100,15 @@ export async function loadAll(opt = {}) {
   ]);
   onProgress({ phase: 'index', pct: 64, text: '指数与涨跌停数据就绪' });
 
-  // 4. 建池
-  const { pool, stats } = buildUniverse(rows, settings);
+  // 4. 建池（基础过滤条件由设置里的 filterConfig 决定）
+  const { pool, stats, budgetPerStock, filterConfig } = buildUniverse(rows, settings);
   onProgress({ phase: 'pool', pct: 66, text: `股票池 ${pool.length} 只` });
 
-  // 5. 主线
-  const ml = analyzeMainline(boards);
+  // 过滤上下文：单只预算与主线 TopN 都会影响条件求值
+  const filterCtx = { budgetPerStock, topN: filterConfig.mainline.topN };
+
+  // 5. 主线（门槛可配置：TopN / 退潮剔除 / 是否启用）
+  const ml = analyzeMainline(boards, filterConfig.mainline);
   const { qualified, stats: mlStats } = annotatePool(pool, ml);
   onProgress({
     phase: 'mainline', pct: 70,
@@ -116,7 +120,7 @@ export async function loadAll(opt = {}) {
   const wantCodes = new Set();
   const want = [];
   for (const k of STRATEGY_KEYS) {
-    for (const s of applyStage1(qualified, k).slice(0, quota)) {
+    for (const s of applyStage1(qualified, k, null, filterConfig, filterCtx).slice(0, quota)) {
       if (wantCodes.has(s.code)) continue;
       wantCodes.add(s.code);
       want.push(s);
@@ -189,6 +193,8 @@ export async function loadAll(opt = {}) {
     rows,
     pool,
     poolStats: stats,
+    budgetPerStock,
+    filterConfig,
     boards,
     ml,
     mlStats,
@@ -278,6 +284,31 @@ export async function refreshPoolOnly(state, opt = {}) {
 /* ---------------- 计算 ---------------- */
 
 /**
+ * 只用已缓存的快照重算「股票池 + 主线」——不联网，毫秒级。
+ * 用户在设置页改了过滤条件后走这条路径，避免为了改一个阈值重拉全市场数据。
+ * @param {object} state  loadAll 产出的 state（需含 rows / boards）
+ * @param {object} settings 新设置
+ * @returns {object} 新的 state
+ */
+export function rebuildPool(state, settings) {
+  const s = { ...state.settings, ...(settings || {}) };
+  const { pool, stats, budgetPerStock, filterConfig } = buildUniverse(state.rows, s);
+  const ml = analyzeMainline(state.boards, filterConfig.mainline);
+  const { qualified, stats: mlStats } = annotatePool(pool, ml);
+  return {
+    ...state,
+    settings: s,
+    pool,
+    poolStats: stats,
+    budgetPerStock,
+    filterConfig,
+    ml,
+    mlStats,
+    qualifiedCount: qualified.length,
+  };
+}
+
+/**
  * 从 state 计算完整分析结果（纯计算，无网络）。
  * @param {object} state
  * @param {object} opt { strategy, capital, maxPicks }
@@ -296,23 +327,32 @@ export function analyze(state, opt = {}) {
   });
   const level = market.level;
 
-  // 2. 主线（不再提前算龙头度：龙头度依赖 K 线动量，必须等因子合并后再算）
+  // 2. 主线（门槛可配置：TopN / 退潮剔除 / 是否启用）
+  const filterConfig = state.filterConfig
+    || resolveFilterConfig(settings.filterConfig, settings);
+  const filterCtx = {
+    budgetPerStock: state.budgetPerStock || (capital * 0.80) / Math.max(1, settings.maxPicks || 5),
+    topN: filterConfig.mainline.topN,
+  };
   const ml = state.ml;
   const { qualified, stats: mlStats } = annotatePool(state.pool, ml);
 
   // 3. 过滤明细：基础链 → 主线门槛 → 该策略 stage1（快照级门槛）
   const poolStats = cloneStats(state.poolStats);
   poolStats.section('主线门槛（所有策略共用）');
-  poolStats.add('属于主线 Top20 且不在退潮', state.pool.length, qualified.length);
+  poolStats.add(filterConfig.mainline.on === false
+    ? '主线门槛已关闭'
+    : `属于主线 Top${filterConfig.mainline.topN}${filterConfig.mainline.avoidBottom === false ? '' : ' 且不在退潮'}`,
+  state.pool.length, qualified.length);
 
   const strategyName = getStrategy(strategy).name;
   poolStats.section(`${strategyName} · 专属门槛`);
-  const stage1Rows = applyStage1(qualified, strategy, poolStats);
+  const stage1Rows = applyStage1(qualified, strategy, poolStats, filterConfig, filterCtx);
 
   // 3.5 四个策略的初筛候选规模对比（同一 qualified 集合，仅 stage1，不带统计）
   const strategyPoolCounts = {};
   for (const k of STRATEGY_KEYS) {
-    strategyPoolCounts[k] = applyStage1(qualified, k, null).length;
+    strategyPoolCounts[k] = applyStage1(qualified, k, null, filterConfig, filterCtx).length;
   }
 
   // 4. 因子
@@ -335,7 +375,7 @@ export function analyze(state, opt = {}) {
   const withLeader = computeLeader(withFactors);
 
   // 5. stage2（K 线因子门槛）+ 保底放宽
-  const stage2Rows = applyStage2(withLeader, strategy, poolStats);
+  const stage2Rows = applyStage2(withLeader, strategy, poolStats, filterConfig, filterCtx);
   const filtered = relaxStage2(stage2Rows, withLeader, qualified, poolStats);
   const finalRows = filtered.rows;
 
@@ -378,9 +418,10 @@ export function analyze(state, opt = {}) {
     strategyFilters: {
       key: strategy,
       name: strategyName,
-      stage1: (strategyFilter(strategy).stage1 || []).map((f) => f.label),
-      stage2: (strategyFilter(strategy).stage2 || []).map((f) => f.label),
+      stage1: (strategyFilter(strategy, filterConfig, filterCtx).stage1 || []).map((f) => f.label),
+      stage2: (strategyFilter(strategy, filterConfig, filterCtx).stage2 || []).map((f) => f.label),
     },
+    filterConfig,
     qualifiedCount: qualified.length,
     factorCount: withFactors.length,
     candidateCount: finalRows.length,

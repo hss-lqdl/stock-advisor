@@ -289,6 +289,105 @@ async function main() {
         ok('设置页策略下拉包含「龙头战法」（4 种策略）', setCheck.optCount >= 4 && setCheck.hasDragon, `选项数 ${setCheck.optCount}，含龙头=${setCheck.hasDragon}`);
         ok('过滤明细卡片标题包含当前策略名', setCheck.hasFilterTitle, setCheck.filterTitleText);
         ok('过滤明细表格包含阶段分组小标题', setCheck.secRowCount >= 2, `分组行数 ${setCheck.secRowCount}`);
+
+        /* ---- 过滤条件编辑器：可开关 / 可编辑 / 可自定义 ---- */
+        const edCheck = await page.evaluate(() => {
+          const titles = [...document.querySelectorAll('#tab-settings .card-title')]
+            .map((c) => (c.innerText || '').trim());
+          const title = titles.find((t) => t.includes('过滤条件设置'));
+          const card = [...document.querySelectorAll('#tab-settings .card')]
+            .find((c) => (c.querySelector('.card-title') || {}).innerText
+              && c.querySelector('.card-title').innerText.includes('过滤条件设置'));
+          if (!card) return { hasTitle: false };
+          const secTitles = [...card.querySelectorAll('.rule-sec-hd .t')].map((n) => (n.innerText || '').trim());
+          const rows = [...card.querySelectorAll('.rule-row')];
+          const switches = [...card.querySelectorAll('.rule-sw .switch')];
+          const inputs = [...card.querySelectorAll('.rule-ctrl .input-xs')];
+          const selects = [...card.querySelectorAll('.rule-ctrl select')];
+          const addBtns = [...card.querySelectorAll('button')].filter((b) => /添加自定义条件/.test(b.innerText || ''));
+          const sub = (card.querySelector('.card-sub') || {}).innerText || '';
+          const numInputs = inputs.filter((i) => i.type === 'number').length;
+          const textInputs = inputs.filter((i) => i.type === 'text').length;
+          return {
+            hasTitle: !!title,
+            sub,
+            secTitles,
+            sectionCount: secTitles.length,
+            rowCount: rows.length,
+            switchCount: switches.length,
+            selectCount: selects.length,
+            numInputs,
+            textInputs,
+            addCount: addBtns.length,
+            hasReset: [...card.querySelectorAll('button')].some((b) => /恢复默认/.test(b.innerText || '')),
+            offRows: card.querySelectorAll('.rule-row.is-off').length,
+            lockedSwitches: card.querySelectorAll('.rule-sw .switch.is-locked').length,
+          };
+        });
+        ok('存在「过滤条件设置」卡片', edCheck.hasTitle, edCheck.hasTitle ? '已渲染' : '未找到');
+        if (edCheck.hasTitle) {
+          info(`过滤条件设置：${edCheck.sub}`);
+          ok('编辑器包含 4 个条件分组（基础/主线/快照/因子）', edCheck.sectionCount >= 4,
+            `分组 ${edCheck.sectionCount}：${edCheck.secTitles.join(' / ')}`);
+          ok('编辑器渲染出 ≥ 10 行条件', edCheck.rowCount >= 10, `规则行 ${edCheck.rowCount}`);
+          ok('每条条件都有独立开关', edCheck.switchCount >= 10, `开关 ${edCheck.switchCount}`);
+          ok('条件阈值可编辑（数值输入框）', edCheck.numInputs >= 5, `数值输入 ${edCheck.numInputs}`);
+          ok('提供运算符下拉（可改比较方式）', edCheck.selectCount >= 3, `下拉 ${edCheck.selectCount}`);
+          ok('支持添加自定义条件', edCheck.addCount >= 2, `添加按钮 ${edCheck.addCount}`);
+          ok('提供「恢复默认」按钮', edCheck.hasReset);
+          ok('必需的停牌条件被锁定（不可关闭）', edCheck.lockedSwitches >= 1, `锁定开关 ${edCheck.lockedSwitches}`);
+
+          /* 交互：关掉第一条基础条件 → 已启用数量减少，且不崩溃 */
+          const toggle = await page.evaluate(() => {
+            const card = [...document.querySelectorAll('#tab-settings .card')]
+              .find((c) => (c.querySelector('.card-title') || {}).innerText
+                && c.querySelector('.card-title').innerText.includes('过滤条件设置'));
+            if (!card) return null;
+            const before = (card.querySelector('.card-sub') || {}).innerText || '';
+            const sw = [...card.querySelectorAll('.rule-sec .rule-row .rule-sw .switch')]
+              .find((s) => !s.classList.contains('is-locked'));
+            if (!sw) return null;
+            sw.click();
+            return { before };
+          });
+          await sleep(2500);
+          const afterToggle = await page.evaluate(() => {
+            const card = [...document.querySelectorAll('#tab-settings .card')]
+              .find((c) => (c.querySelector('.card-title') || {}).innerText
+                && c.querySelector('.card-title').innerText.includes('过滤条件设置'));
+            const errBox = !!document.querySelector('#tab-settings .err-box');
+            return {
+              sub: card ? ((card.querySelector('.card-sub') || {}).innerText || '') : '',
+              offRows: card ? card.querySelectorAll('.rule-row.is-off').length : -1,
+              errBox,
+              bodyLen: document.body.innerHTML.length,
+            };
+          });
+          ok('关闭一条过滤条件后计数下降',
+            toggle && afterToggle.sub !== toggle.before,
+            toggle ? `${toggle.before} → ${afterToggle.sub}` : '未找到可关闭的开关');
+          ok('关闭后该行显示为已停用样式', afterToggle.offRows >= 1, `is-off 行 ${afterToggle.offRows}`);
+          ok('切换过滤条件后页面未出错也未白屏',
+            !afterToggle.errBox && afterToggle.bodyLen > 3000, `errBox=${afterToggle.errBox} body=${afterToggle.bodyLen}`);
+
+          /* 复原：恢复默认，避免影响后续断言 */
+          await page.evaluate(() => {
+            const card = [...document.querySelectorAll('#tab-settings .card')]
+              .find((c) => (c.querySelector('.card-title') || {}).innerText
+                && c.querySelector('.card-title').innerText.includes('过滤条件设置'));
+            if (!card) return;
+            const b = [...card.querySelectorAll('button')].find((x) => /恢复默认/.test(x.innerText || ''));
+            if (b) b.click();
+          });
+          await sleep(2500);
+          const afterReset = await page.evaluate(() => {
+            const card = [...document.querySelectorAll('#tab-settings .card')]
+              .find((c) => (c.querySelector('.card-title') || {}).innerText
+                && c.querySelector('.card-title').innerText.includes('过滤条件设置'));
+            return card ? card.querySelectorAll('.rule-row.is-off').length : -1;
+          });
+          ok('「恢复默认」把关闭的条件重新打开', afterReset === 0, `is-off 行 ${afterReset}`);
+        }
       }
     } catch (e) {
       ok(`Tab[${t.tab}] 渲染`, false, String(e.message || e));

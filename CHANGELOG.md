@@ -6,6 +6,52 @@
 
 ---
 
+## v1.5.0 · 2026-11-04
+
+### 新增：过滤条件全部可配置
+- **新模块 `web/js/filters.js`**（零依赖，纯数据 + 纯函数）：把原先写死在 `universe.js` / `strategy.js` 里的闭包过滤条件，
+  改成**可 JSON 序列化的声明式规则** `{id, on, kind, special, field, op, value, value2, strict, custom, label, note}`。
+  导出 `FILTER_FIELDS`（33 个可选字段）、`OPS`（9 种运算符）、`SPECIAL_RULES`、`BASE_RULE_DEFAULTS`、
+  `MAINLINE_DEFAULTS`、`STAGE_RULE_DEFAULTS`、`evalRule` / `runRules` / `ruleLabel`、
+  `resolveFilterConfig` / `serializeConfig` / `mergeList` / `setRule` / `upsertRule` / `removeRule` / `countRules`。
+- **设置页新增「过滤条件设置」编辑器**：四个分组（基础过滤 / 主线门槛 / 当前策略快照门槛 / 当前策略因子门槛），
+  每条条件都有独立开关、可改阈值、可改运算符，支持添加自定义条件与一键「恢复默认」。
+  顶部策略下拉可切换要编辑哪个策略（四个策略的专属门槛互相独立）。
+- **`engine.rebuildPool(state, settings)`**：只用本地缓存的快照重算股票池与主线，**不联网、毫秒级**，
+  使「改一条过滤条件」从「等一次全量刷新」变成「秒级生效」。
+- **`analyzeMainline(rawBoards, opt)`**：主线门槛参数化，支持 `topN` / `bottomN` / `avoidBottom` / `on`；
+  省略 `opt` 时行为与旧版逐字一致。个股的主线合格判定改为读 `ml.opt`。
+- **`strategy.js` 改为编译式**：`STRATEGY_FILTERS` 现在是 `filters.js` 默认规则编译出的结果（名字与
+  `{stage1:[{label,test}],stage2}` 形状保持不变，兼容既有调用）；新增 `strategyRules(key, cfg)` 返回规则对象供编辑器使用；
+  `strategyFilter(key, cfg?, ctx?)`、`applyStage1/applyStage2(rows, key, stats, cfg?, ctx?)` 增加可选参数。
+
+### 修复
+- **改设置后点「重新分析」仍用旧参数**：`main.js` 的 `reanalyze()` 原先读启动时缓存的 `S.settings`，
+  导致刚改的过滤条件不生效（这正是「排除创业板」开关以前必须整页刷新才起作用的原因）。现改为每次重新 `settingsLoad()`。
+- **科创板的「一手成本」按错误的股数计算**：`universe.js` 的预算过滤对 688 一律按 100 股算，
+  但科创板一手是 200 股，导致买不起的股票混进候选池、生成计划时被静默剔除。现按 200 股计算。
+
+### 变更
+- 移除设置页原先独立的「排除创业板」开关：它现在是「基础过滤」里的一条普通规则（id `chiNext`），
+  统一由过滤条件编辑器管理，消除「两个地方都能改同一个行为」的双真相源。
+- `store.js` 的 `DEFAULT_SETTINGS` 新增 `filterConfig: null`（`null` = 全部用代码默认值）；
+  旧的 `minMarketCap` / `maxMarketCap` / `excludeChiNext` 字段保留为**迁移字段**，
+  在 `resolveFilterConfig` 里回填进规则，保证老用户升级后设置不丢失。
+- `web/sw.js` `VERSION` → `v1.5.0`，预缓存清单加入 `./js/filters.js`。
+- `web/style.css` 新增过滤条件编辑器的样式（`.rule-bar` / `.rule-sec` / `.rule-row` / `.rule-sw` / `.rule-ctrl` 等）。
+
+### 测试
+- 离线算法自测从 465 项扩充至 **531 项**：新增 `filters.js` 专项（字段表与换算系数、运算符表、特殊条件锁定、
+  标签生成、fail-open 与 strict fail-closed、统计器、`setRule` 不可变性、`mergeList` 合并语义、
+  旧设置迁移、序列化往返），以及**集成断言**（关掉「成交额」条件后低成交额股票真的回到池里、
+  改阈值到 10 亿后全部被剔除、关掉「排除创业板」后 300 开头的股票真的回来、主线门槛参数化）。
+- 联网自测 **563 项**全部通过（2.3s）。
+- 浏览器 E2E 从 47 项扩充至 **60 项**：新增过滤条件编辑器的渲染与交互断言
+  （4 个分组、20 行条件、独立开关、数值输入、运算符下拉、添加自定义、恢复默认、锁定开关、
+  关闭一条后计数从「已启用 45 / 45」变为「44 / 45」且页面不白屏、恢复默认后归零）。
+
+**版本** v1.5.0 · 2026-11-04
+
 ## v1.4.0 · 2026-11-04
 
 ### 新增
