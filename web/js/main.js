@@ -5,7 +5,9 @@
    ============================================================ */
 
 import { fetchIndexes, fetchQuotes, ymd } from './api.js';
-import { loadAll, refreshPoolOnly, analyze, rebuildPool, marketPhase, msToTail } from './engine.js';
+import {
+  loadAll, refreshPoolOnly, analyze, rebuildPool, marketPhase, isTradingDate, msToTail,
+} from './engine.js';
 import { settingsLoad, metaGet, metaSet, klinesGet } from './store.js';
 import { computeFactors } from './indicators.js';
 import {
@@ -189,8 +191,6 @@ async function reload(opt = {}) {
     S.quotes = buildQuotesFromPool();
 
     saveSlim();
-    render();
-    updateBadge();
 
     const n = S.result.plan.items.length;
     if (!opt.silent) {
@@ -319,7 +319,12 @@ function switchTab(tab) {
 function setClock() {
   const node = $('#clockLine');
   if (!node) return;
-  const phase = marketPhase(new Date());
+  const now = new Date();
+  let phase = marketPhase(now);
+  if (S.state && ['morning', 'lunch', 'afternoon', 'tail'].includes(phase)
+    && !isTradingDate(S.state.indexKl, now)) {
+    phase = 'closed';
+  }
   const label = {
     weekend: '休市', pre: '盘前', auction: '集合竞价', morning: '交易中',
     lunch: '午间休市', afternoon: '交易中', tail: '尾盘', closed: '已收盘',
@@ -359,6 +364,10 @@ function tailTick() {
 
   const now = new Date();
   const phase = marketPhase(now);
+  if (!S.state || !isTradingDate(S.state.indexKl, now)) {
+    bar.classList.add('hidden');
+    return;
+  }
   const ms = msToTail(now);            // 距 14:55 的毫秒数
 
   // 只在「14:30 之后」到「15:05」之间显示
@@ -384,7 +393,7 @@ function tailTick() {
 }
 
 async function tailRefresh() {
-  if (!S.state || S.tailRefreshing) return;
+  if (!S.state || S.tailRefreshing || !isTradingDate(S.state.indexKl)) return;
   S.tailRefreshing = true;
   try {
     showProgress(30, '尾盘刷新行情…');
@@ -395,11 +404,14 @@ async function tailRefresh() {
     S.result = analyze(next, { settings: S.settings || {} });
     S.quotes = buildQuotesFromPool();
     S.lastTailAt = Date.now();
+    S.error = '';
     saveSlim();
     render();
     updateBadge();
   } catch (e) {
+    S.error = '尾盘行情刷新失败：' + (e && e.message ? e.message : String(e));
     console.error('尾盘刷新失败', e);
+    render();
   } finally {
     S.tailRefreshing = false;
     hideProgress();
@@ -668,7 +680,9 @@ function bind() {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible') return;
     const now = new Date();
-    if (marketPhase(now) === 'tail' && Date.now() - S.lastTailAt > 30000 && S.state) {
+    if (marketPhase(now) === 'tail' && S.state
+      && isTradingDate(S.state.indexKl, now)
+      && Date.now() - S.lastTailAt > 30000) {
       tailRefresh();
     }
   });

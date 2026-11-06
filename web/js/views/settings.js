@@ -20,6 +20,7 @@ import {
 import { runBacktest, runBacktestMatrix } from '../backtest.js';
 
 const GROUP_LABEL = { snap: '快照字段', factor: 'K线因子', text: '文本字段' };
+const renderVersions = new WeakMap();
 
 /** 输入项 */
 function field(label, hint, inputNode) {
@@ -264,7 +265,7 @@ function ruleRow(rule, labelCtx, onPatch, onDelete) {
   });
   if (!locked) sw.addEventListener('click', () => onPatch({ on: !on }));
 
-  return el('div', { class: 'rule-row' + (on ? '' : ' is-off') }, [
+  return el('div', { class: 'rule-row' + (on ? '' : ' is-off') + (rule.custom ? ' is-custom' : '') }, [
     el('div', { class: 'rule-sw' }, [sw]),
     el('div', { class: 'rule-main' }, [
       el('div', { class: 'lbl', text: ruleLabel(rule, labelCtx) }),
@@ -287,12 +288,13 @@ function buildFilterEditorCard(s, ctx) {
   };
   let editKey = STRATEGIES[s.strategy] ? s.strategy : 'balanced';
 
-  const card = el('div', { class: 'card' });
+  const card = el('div', { class: 'card settings-filter-editor' });
   const hd = el('div', { class: 'card-hd' });
   const body = el('div');
   card.append(hd, body);
 
   const commit = async () => {
+    const scrollY = window.scrollY;
     const saved = serializeConfig(work);
     // 兼容旧字段：让「排除创业板」的旧开关状态与新规则保持一致
     const chi = (saved.base || []).find((r) => r.id === 'chiNext');
@@ -301,6 +303,7 @@ function buildFilterEditorCard(s, ctx) {
       excludeChiNext: chi ? chi.on !== false : s.excludeChiNext,
     });
     draw();
+    window.scrollTo(0, scrollY);
     if (ctx.onAnalyze) ctx.onAnalyze();
   };
 
@@ -352,8 +355,8 @@ function buildFilterEditorCard(s, ctx) {
     reset.addEventListener('click', async () => {
       await settingsSave({ filterConfig: null, excludeChiNext: true });
       toast('过滤条件已恢复默认');
-      if (ctx.onReload) ctx.onReload();
-      else if (ctx.onAnalyze) ctx.onAnalyze();
+      if (ctx.onAnalyze) ctx.onAnalyze();
+      else if (ctx.onReload) ctx.onReload();
     });
     const editSel = el('select', { class: 'select select-sm', 'aria-label': '要编辑哪个策略的过滤条件' });
     for (const [k, v] of Object.entries(STRATEGIES)) {
@@ -457,12 +460,16 @@ function buildFilterEditorCard(s, ctx) {
  * @param {object} ctx { result, state, onReload, onAnalyze }
  */
 export async function renderSettings(root, ctx) {
+  const renderVersion = (renderVersions.get(root) || 0) + 1;
+  renderVersions.set(root, renderVersion);
+  const scrollY = window.scrollY;
   root.innerHTML = '';
 
   const s = await settingsLoad();
+  if (renderVersions.get(root) !== renderVersion) return;
 
   /* ---------- 基本设置 ---------- */
-  const basic = el('div', { class: 'card' });
+  const basic = el('div', { class: 'card settings-basic' });
   basic.append(el('div', { class: 'card-hd' }, [
     el('div', { class: 'card-title', text: '交易设置' }),
   ]));
@@ -555,7 +562,7 @@ export async function renderSettings(root, ctx) {
   root.append(basic);
 
   /* ---------- 开关 ---------- */
-  const toggleCard = el('div', { class: 'card' });
+  const toggleCard = el('div', { class: 'card settings-toggles' });
   toggleCard.append(el('div', { class: 'card-hd' }, [
     el('div', { class: 'card-title', text: '功能开关' }),
   ]));
@@ -575,7 +582,7 @@ export async function renderSettings(root, ctx) {
   root.append(buildFilterEditorCard(s, ctx));
 
   /* ---------- 回测 ---------- */
-  const btCard = el('div', { class: 'card' });
+  const btCard = el('div', { class: 'card settings-backtest' });
   btCard.append(el('div', { class: 'card-hd' }, [
     el('div', { class: 'card-title', text: '策略回测' }),
     el('div', { class: 'card-sub', text: '验证历史表现' }),
@@ -632,7 +639,7 @@ export async function renderSettings(root, ctx) {
   root.append(btCard);
 
   /* ---------- 数据管理 ---------- */
-  const dataCard = el('div', { class: 'card' });
+  const dataCard = el('div', { class: 'card settings-data' });
   dataCard.append(el('div', { class: 'card-hd' }, [
     el('div', { class: 'card-title', text: '数据管理' }),
   ]));
@@ -643,6 +650,7 @@ export async function renderSettings(root, ctx) {
     est = await storageEstimate();
     klCount = await klinesCount();
   } catch (e) { /* ignore */ }
+  if (renderVersions.get(root) !== renderVersion) return;
 
   // poolStats 从 IndexedDB 恢复后 output getter 会丢失，两处都要兜底推导
   const rps = (ctx.result && ctx.result.poolStats) || {};
@@ -719,7 +727,7 @@ export async function renderSettings(root, ctx) {
   if (ctx.result && ctx.result.poolStats && ctx.result.poolStats.steps) {
     const ps = ctx.result.poolStats;
     const stName = ctx.result.strategyName || '当前策略';
-    const filterCard = el('div', { class: 'card' });
+    const filterCard = el('div', { class: 'card settings-filter-details' });
     filterCard.append(el('div', { class: 'card-hd' }, [
       el('div', { class: 'card-title', text: `股票池过滤明细 · ${stName}` }),
       el('div', { class: 'card-sub', text: `最终候选 ${fmtInt(poolOut)} 只` }),
@@ -804,7 +812,7 @@ export async function renderSettings(root, ctx) {
   }
 
   /* ---------- 关于与风险提示 ---------- */
-  const about = el('div', { class: 'card' });
+  const about = el('div', { class: 'card settings-about' });
   about.append(el('div', { class: 'card-hd' }, [
     el('div', { class: 'card-title', text: '关于' }),
   ]));
@@ -836,6 +844,7 @@ export async function renderSettings(root, ctx) {
   root.append(about);
 
   root.append(el('div', { class: 'center dim tiny', style: { padding: '8px 0 16px' }, text: 'v1.0 · 本地离线运行' }));
+  requestAnimationFrame(() => window.scrollTo(0, scrollY));
 }
 
 /** 安装说明 */

@@ -386,22 +386,21 @@ export async function fetchList(fs, fields, opt = {}) {
     `${HOST_PUSH}/api/qt/clist/get?pn=1&pz=${pageSize}&po=1&np=1&${BASE}` +
     `&fid=${sortField}&fs=${encodeURIComponent(fs)}&fields=${fields}`;
 
-  const first = await getJSON(firstUrl, { timeout: opt.timeout || 12000 });
+  const first = await getJSON(firstUrl, {
+    timeout: opt.timeout || 12000,
+    retry: opt.retry,
+  });
   const data = first && first.data;
-  if (!data || !Array.isArray(data.diff)) {
-    // 有时 data.diff 是对象（key 为序号），统一转数组
-    if (data && data.diff && typeof data.diff === 'object') {
-      const arr = Object.values(data.diff);
-      return arr;
-    }
-    return [];
-  }
-
-  const total = Number(data.total) || data.diff.length;
+  if (!data) return [];
+  // 有时 data.diff 是对象（key 为序号），统一转数组
+  const firstRows = Array.isArray(data.diff)
+    ? data.diff
+    : data.diff && typeof data.diff === 'object'
+      ? Object.values(data.diff)
+      : [];
+  const total = Number(data.total) || firstRows.length;
   const pages = opt.pages || Math.ceil(total / pageSize);
-  const out = [...data.diff];
-
-  if (pages <= 1) return out;
+  const out = [...firstRows];
 
   const tasks = [];
   for (let p = 2; p <= pages; p++) {
@@ -409,24 +408,38 @@ export async function fetchList(fs, fields, opt = {}) {
       `${HOST_PUSH}/api/qt/clist/get?pn=${p}&pz=${pageSize}&po=1&np=1&${BASE}` +
       `&fid=${sortField}&fs=${encodeURIComponent(fs)}&fields=${fields}`;
     tasks.push(async () => {
-      const j = await getJSON(url, { timeout: opt.timeout || 12000 });
+      const j = await getJSON(url, {
+        timeout: opt.timeout || 12000,
+        retry: opt.retry,
+      });
       const d = j && j.data;
-      if (!d) return [];
+      if (!d) throw new ApiError('分页响应无数据', url);
       if (Array.isArray(d.diff)) return d.diff;
       if (d.diff && typeof d.diff === 'object') return Object.values(d.diff);
-      return [];
+      throw new ApiError('分页响应格式无效', url);
     });
   }
 
   let donePages = 1;
-  const rs = await withProgress(tasks, limit, (d, t) => {
-    donePages = 1 + d;
-    if (opt.onPage) {
-      try { opt.onPage(donePages, pages, out.length); } catch (e) { /* ignore */ }
-    }
-  });
+  const rs = tasks.length
+    ? await withProgress(tasks, limit, (d) => {
+      donePages = 1 + d;
+      if (opt.onPage) {
+        try { opt.onPage(donePages, pages, out.length); } catch (e) { /* ignore */ }
+      }
+    })
+    : [];
 
-  for (const r of rs) if (Array.isArray(r)) out.push(...r);
+  const failedPages = rs
+    .map((r, i) => Array.isArray(r) ? null : i + 2)
+    .filter((page) => page !== null);
+  if (failedPages.length) {
+    throw new ApiError(
+      `行情分页不完整：第 ${failedPages.join('、')} 页请求失败，共 ${pages} 页`,
+      firstUrl,
+    );
+  }
+  for (const r of rs) out.push(...r);
 
   // 去重（分页边界可能重复）
   const seen = new Set();
@@ -437,6 +450,12 @@ export async function fetchList(fs, fields, opt = {}) {
     seen.add(code);
     uniq.push(x);
   }
+  if (opt.requireComplete && uniq.length !== total) {
+    throw new ApiError(
+      `行情分页不完整：预期 ${total} 条，实际 ${uniq.length} 条`,
+      firstUrl,
+    );
+  }
   return uniq;
 }
 
@@ -446,6 +465,8 @@ export function fetchSnapshot(opt = {}) {
     limit: opt.limit || 6,
     onPage: opt.onPage,
     timeout: opt.timeout,
+    sortField: 'f12',
+    requireComplete: true,
   });
 }
 

@@ -40,7 +40,7 @@ function renderMarketCard(result, indexes) {
   const m = result.market;
   const lv = m.level;
 
-  const card = el('div', { class: 'card' });
+  const card = el('div', { class: 'card today-market' });
 
   card.append(el('div', { class: 'mkt-top' }, [
     el('div', {}, [
@@ -101,7 +101,7 @@ function renderMarketCard(result, indexes) {
 function renderAdvice(result) {
   const lv = result.level;
   const plan = result.plan;
-  const card = el('div', { class: 'card' });
+  const card = el('div', { class: 'card today-advice' });
 
   // poolStats 从 IndexedDB 恢复后 output getter 会丢失，这里做一次兜底推导，
   // 避免首屏出现「候选标的 -- 只」。
@@ -158,13 +158,13 @@ function renderAdvice(result) {
 function renderPlanSummary(result) {
   const plan = result.plan;
   if (!plan.items || !plan.items.length) {
-    return el('div', { class: 'card' }, [
+    return el('div', { class: 'card today-plan' }, [
       el('div', { class: 'card-title mb0', text: '今日买入计划' }),
       emptyState('当前无符合条件的标的（可能市场过弱或数据未加载）'),
     ]);
   }
 
-  const card = el('div', { class: 'card' });
+  const card = el('div', { class: 'card today-plan' });
   card.append(el('div', { class: 'card-hd' }, [
     el('div', { class: 'card-title', text: '今日买入计划' }),
     el('div', { class: 'card-sub', text: `合计 ${fmtInt(plan.totalAmount)} 元` }),
@@ -229,7 +229,7 @@ function renderMainlineBrief(result) {
   const top = (result.ml && result.ml.top) || [];
   if (!top.length) return null;
 
-  const card = el('div', { class: 'card' });
+  const card = el('div', { class: 'card today-mainline' });
   card.append(el('div', { class: 'card-hd' }, [
     el('div', { class: 'card-title', text: '近一周主线（Top 6）' }),
     el('div', { class: 'card-sub', text: '按 5 日强度' }),
@@ -273,7 +273,7 @@ export function renderToday(root, ctx) {
     return;
   }
 
-  if (ctx.error) {
+  if (ctx.error && !ctx.result) {
     root.append(errorBox(ctx.error, ctx.onReload));
     return;
   }
@@ -284,6 +284,13 @@ export function renderToday(root, ctx) {
     return;
   }
 
+  if (ctx.error) {
+    root.append(el('div', {
+      class: 'err-box today-error',
+      text: `${ctx.error}。当前仍显示上次数据，请确认数据时间后再使用。`,
+    }));
+  }
+
   root.append(renderMarketCard(r, ctx.indexes));
   root.append(renderAdvice(r));
   root.append(renderPlanSummary(r));
@@ -292,7 +299,7 @@ export function renderToday(root, ctx) {
   if (ml) root.append(ml);
 
   // 数据时间
-  root.append(el('div', { class: 'center dim tiny', style: { padding: '8px 0 4px' } }, [
+  root.append(el('div', { class: 'center dim tiny today-updated', style: { padding: '8px 0 4px' } }, [
     `数据更新于 ${new Date(r.refreshedAt || r.loadedAt).toLocaleTimeString('zh-CN')} · 数据来源：东方财富`,
   ]));
 }

@@ -9,6 +9,8 @@ import {
 import { positionPnl, sellFee } from '../plan.js';
 import { positionsLoadAll, positionAdd, positionUpdate, positionRemove } from '../store.js';
 
+const renderVersions = new WeakMap();
+
 /** 从计划一键导入持仓 */
 async function importFromPlan(result) {
   const plan = result.plan;
@@ -95,7 +97,7 @@ function showAddPosition(onDone) {
 /** 单条持仓卡 */
 function positionCard(pos, price, onChanged) {
   const pnl = positionPnl(pos, price);
-  const card = el('div', { class: 'card', style: { marginBottom: '10px' } });
+  const card = el('div', { class: 'card position-card' });
 
   card.append(el('div', { class: 'row-between' }, [
     el('div', {}, [
@@ -177,6 +179,8 @@ function positionCard(pos, price, onChanged) {
  * @param {object} ctx { result, positions, quotes, loading, onReload, onChanged }
  */
 export async function renderPositions(root, ctx) {
+  const renderVersion = (renderVersions.get(root) || 0) + 1;
+  renderVersions.set(root, renderVersion);
   root.innerHTML = '';
 
   let positions = [];
@@ -185,6 +189,7 @@ export async function renderPositions(root, ctx) {
   } catch (e) {
     positions = [];
   }
+  if (renderVersions.get(root) !== renderVersion) return;
 
   const quotes = ctx.quotes || new Map();
   const priceOf = (code) => {
@@ -193,7 +198,7 @@ export async function renderPositions(root, ctx) {
   };
 
   // 顶部操作
-  const head = el('div', { class: 'row-between', style: { marginBottom: '12px' } });
+  const head = el('div', { class: 'row-between positions-header' });
   head.append(el('div', {
     class: 'sec-title',
     style: { margin: '0' },
@@ -235,7 +240,7 @@ export async function renderPositions(root, ctx) {
     const totalPnl = totalValue - totalCost;
     const totalPnlPct = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
 
-    const summary = el('div', { class: 'card' });
+    const summary = el('div', { class: 'card positions-summary' });
     summary.append(el('div', { class: 'stats' }, [
       el('div', { class: 'stat' }, [
         el('div', { class: 'k', text: '总成本' }),

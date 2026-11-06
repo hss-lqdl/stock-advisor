@@ -50,6 +50,13 @@ export function marketPhase(now = new Date()) {
   return 'closed';
 }
 
+/** 指数日 K 是否已确认当前日期为交易日。 */
+export function isTradingDate(indexKl, now = new Date()) {
+  const dates = indexKl && indexKl.dates;
+  if (!Array.isArray(dates) || !dates.length) return false;
+  return String(dates[dates.length - 1]).replace(/-/g, '') === ymd(now);
+}
+
 /** 距离尾盘窗口开始的毫秒数（负数表示已进入/已过） */
 export function msToTail(now = new Date()) {
   const t = new Date(now);

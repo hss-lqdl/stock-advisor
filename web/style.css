@@ -675,6 +675,8 @@ body { min-height: 100vh; min-height: 100dvh; }
   border-left: 3px solid var(--amber);
 }
 .disclaimer b { color: var(--amber); }
+.position-card { margin-bottom: 10px; }
+.positions-header { margin-bottom: 12px; }
 
 /* ---------------- 通用工具类 ---------------- */
 .mono { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
@@ -709,4 +711,96 @@ body { min-height: 100vh; min-height: 100dvh; }
 @media (min-width: 640px) {
   #main { max-width: 720px; margin: 0 auto; width: 100%; }
   .stats { grid-template-columns: repeat(4, 1fr); }
+  #tabbar {
+    left: 50%;
+    right: auto;
+    width: min(720px, 100%);
+    transform: translateX(-50%);
+    border-left: 1px solid var(--line);
+    border-right: 1px solid var(--line);
+    border-radius: 14px 14px 0 0;
+  }
+}
+
+@media (min-width: 960px) {
+  #main {
+    max-width: 1280px;
+    padding: 22px 28px calc(var(--tabbar-h) + 32px);
+  }
+
+  #topbar {
+    padding-right: max(24px, calc((100vw - 1280px) / 2 + 28px));
+    padding-left: max(24px, calc((100vw - 1280px) / 2 + 28px));
+  }
+
+  #todayContent,
+  #mainlineContent,
+  #picksContent,
+  #positionsContent,
+  #settingsContent {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+    gap: 16px;
+    min-width: 0;
+  }
+
+  #todayContent > *,
+  #mainlineContent > *,
+  #picksContent > *,
+  #positionsContent > *,
+  #settingsContent > * {
+    min-width: 0;
+    margin-bottom: 0;
+  }
+
+  #todayContent > .today-error,
+  #todayContent > .today-plan,
+  #todayContent > .today-mainline,
+  #todayContent > .today-updated,
+  #mainlineContent > .card:nth-child(1),
+  #mainlineContent > .disclaimer,
+  #picksContent > .card:first-child,
+  #picksContent > .disclaimer,
+  #picksContent > .card:last-child,
+  #positionsContent > .positions-header,
+  #positionsContent > .positions-summary,
+  #positionsContent > .card:not(.position-card),
+  #positionsContent > .disclaimer,
+  #positionsContent > .empty,
+  #settingsContent > .settings-filter-editor,
+  #settingsContent > .settings-filter-details,
+  #settingsContent > .settings-about,
+  #settingsContent > .center {
+    grid-column: 1 / -1;
+  }
+
+  #tabbar {
+    left: 50%;
+    right: auto;
+    width: min(1280px, 100%);
+    transform: translateX(-50%);
+    border-left: 1px solid var(--line);
+    border-right: 1px solid var(--line);
+    border-radius: 14px 14px 0 0;
+  }
+
+  #positionsContent > .position-card { margin-bottom: 0; }
+}
+
+@media (max-width: 480px) {
+  .rule-row.is-custom { flex-wrap: wrap; }
+  .rule-row.is-custom .rule-main { flex: 1 1 calc(100% - 47px); }
+  .rule-row.is-custom .rule-ctrl {
+    flex: 1 1 calc(100% - 47px);
+    min-width: 0;
+    margin-left: 47px;
+    flex-wrap: wrap;
+  }
+  .rule-row.is-custom .rule-ctrl > .select-xs:first-child {
+    flex: 1 1 100%;
+    width: 100%;
+    min-width: 0;
+  }
+  .rule-row.is-custom .rule-ctrl > .input-xs { width: 68px; }
 }

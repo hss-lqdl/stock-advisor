@@ -58,8 +58,8 @@ function near(actual, expected, tol, label) {
   ok(Math.abs(actual - expected) <= tol, label, `期望 ${expected}±${tol}，实际 ${actual}`);
 }
 
-function inRange(actual, lo, hi, label) {
-  ok(actual >= lo && actual <= hi, label, `期望 [${lo}, ${hi}]，实际 ${actual}`);
+function inRange(actual, lo, hi, label, extra) {
+  ok(actual >= lo && actual <= hi, label, extra || `期望 [${lo}, ${hi}]，实际 ${actual}`);
 }
 
 function info(label, value) {
@@ -1135,6 +1135,7 @@ async function testBacktest() {
 
 async function testApiOffline() {
   const A = await import(url('api.js'));
+  const E = await import(url('engine.js'));
   describe('api.js · 解析与常量（离线部分）');
 
   // secid 前缀
@@ -1174,6 +1175,50 @@ async function testApiOffline() {
   ok(err instanceof Error, 'ApiError 继承 Error');
   eq(err.name, 'ApiError', 'ApiError.name 正确');
   eq(err.url, 'http://x', 'ApiError 保留 url');
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const requestUrl = new URL(String(input));
+    const page = Number(requestUrl.searchParams.get('pn'));
+    if (page === 2) return new Response('', { status: 503 });
+    const start = (page - 1) * 100;
+    const count = page === 1 ? 100 : 1;
+    return new Response(JSON.stringify({
+      data: {
+        total: 201,
+        diff: Array.from({ length: count }, (_, i) => ({ f12: String(start + i + 1) })),
+      },
+    }), { status: 200 });
+  };
+  let pageError = null;
+  try {
+    await A.fetchList('m:0+t:6', 'f12', { pageSize: 100, limit: 2, retry: 0 });
+  } catch (e) {
+    pageError = e;
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  ok(pageError instanceof A.ApiError, '分页失败时不返回不完整列表');
+  ok(pageError && pageError.message.includes('第 2 页'), '分页失败错误指出失败页码');
+
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    data: { total: 2, diff: [{ f12: '1' }] },
+  }), { status: 200 });
+  let shortPageError = null;
+  try {
+    await A.fetchList('m:0+t:6', 'f12', { pageSize: 100, retry: 0, requireComplete: true });
+  } catch (e) {
+    shortPageError = e;
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  ok(shortPageError instanceof A.ApiError, '单页条数不足时不返回部分列表');
+  ok(shortPageError && shortPageError.message.includes('预期 2 条'), '单页不完整错误包含实际数量');
+
+  const tradingDay = new Date(2026, 9, 26);
+  ok(E.isTradingDate({ dates: ['2026-10-26'] }, tradingDay), '指数日 K 当天有记录 → 交易日');
+  ok(!E.isTradingDate({ dates: ['2026-10-23'] }, tradingDay), '指数日 K 停留在前一交易日 → 休市');
+  ok(!E.isTradingDate(null, tradingDay), '缺少指数日 K 时不假定为交易日');
 }
 
 /* ============================================================
@@ -1347,8 +1392,9 @@ async function testLiveLate(pool, ml, qualified, rows, ztPool, dtPool, mkt) {
   // 7. K 线（限制 60 只以控制耗时）
   // 上游 HIS 池被本机限流时同样可能拉不到；与产品内一致——逐只容错，且允许「零 K 线」降级（因子环节跳过）。
   let klines = new Map();
+  const want = qualified.slice(0, 60);
+  const minKlineSamples = Math.min(20, Math.ceil(want.length * 0.4));
   try {
-    const want = qualified.slice(0, 60);
     process.stdout.write('  拉取 ' + want.length + ' 只日 K 线…');
     const tk = Date.now();
     klines = await A.fetchKlines(want.map((s) => s.code), 250, { limit: 6 });
@@ -1358,7 +1404,8 @@ async function testLiveLate(pool, ml, qualified, rows, ztPool, dtPool, mkt) {
   }
   if (klines.size > 0) {
     // 允许少量失败：上游 HIS 池限流时并发 6 会有部分连接被拒，产品端逐只容错。
-    ok(klines.size >= 60 * 0.5, 'K 线成功率 ≥ 50%', `${klines.size}/60`);
+    ok(klines.size >= Math.ceil(want.length * 0.5), 'K 线成功率 ≥ 50%',
+      `${klines.size}/${want.length}`);
     // 7.1 用当日快照补齐今日 bar
     const poolMap = U.poolToMap(pool);
     for (const [code, kl] of klines) {
@@ -1392,7 +1439,8 @@ async function testLiveLate(pool, ml, qualified, rows, ztPool, dtPool, mkt) {
     if (badQ.length) {
       info('K 线质量门槛', `剔除残缺 ${badQ.length} 只（${badQ.slice(0, 3).map(([c, k]) => c + ':' + A.klineQuality(k).reason).join(' ')}）`);
     }
-    ok(goodQ.length >= 20, '质量门槛后留存 K 线 ≥ 20 只', `${goodQ.length}/${klines.size}`);
+    ok(goodQ.length >= minKlineSamples, `质量门槛后留存 K 线 ≥ ${minKlineSamples} 只`,
+      `${goodQ.length}/${klines.size}`);
     ok(badQ.length <= Math.max(2, Math.floor(klines.size * 0.2)), '残缺 K 线占比 ≤ 20%（超出说明上游大面积异常）',
       badQ.length ? `${badQ.length}/${klines.size}` : '');
     for (const [c] of badQ) klines.delete(c); // 与 engine.js 一致：残缺样本不进入因子计算
@@ -1414,7 +1462,8 @@ async function testLiveLate(pool, ml, qualified, rows, ztPool, dtPool, mkt) {
     info('在线端到端', 'K 线上游不可用（push2his 限流），跳过因子/选股/计划/回测断言（非产品缺陷）');
     return;
   }
-  ok(withFactors.length >= 20, '因子齐备股票数 ≥ 20', '实际 ' + withFactors.length);
+  ok(withFactors.length >= minKlineSamples,
+    `因子齐备股票数 ≥ ${minKlineSamples}`, '实际 ' + withFactors.length);
 
   // 9. 打分 + 约束 + 计划
   const strategy = 'balanced';

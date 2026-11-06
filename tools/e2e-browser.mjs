@@ -290,6 +290,78 @@ async function main() {
         ok('过滤明细卡片标题包含当前策略名', setCheck.hasFilterTitle, setCheck.filterTitleText);
         ok('过滤明细表格包含阶段分组小标题', setCheck.secRowCount >= 2, `分组行数 ${setCheck.secRowCount}`);
 
+        section('桌面与移动端自适应');
+        await page.evaluate(() => document.querySelector('.tab-btn[data-tab="today"]').click());
+        await page.waitForFunction(() => {
+          const content = document.querySelector('#todayContent');
+          return content && content.querySelector('.today-market')
+            && content.querySelector('.today-advice');
+        }, { timeout: 5000 });
+        for (const width of [1024, 1440, 1920]) {
+          await page.setViewport({ width, height: 1000, deviceScaleFactor: 1, isMobile: false, hasTouch: false });
+          await page.waitForFunction(() => {
+            const content = document.querySelector('#todayContent');
+            return content && content.querySelector('.today-market')
+              && content.querySelector('.today-advice');
+          }, { timeout: 5000 });
+          const desktopLayout = await page.evaluate(() => {
+            const main = document.querySelector('#main');
+            const content = document.querySelector('#todayContent');
+            const settings = document.querySelector('#settingsContent');
+            const tabbar = document.querySelector('#tabbar');
+            const marketRect = content.querySelector('.today-market').getBoundingClientRect();
+            const adviceRect = content.querySelector('.today-advice').getBoundingClientRect();
+            const tabRect = tabbar.getBoundingClientRect();
+            const mainRect = main.getBoundingClientRect();
+            return {
+              mainWidth: mainRect.width,
+              mainCentered: Math.abs((mainRect.left + mainRect.right) / 2 - window.innerWidth / 2) < 2,
+              contentColumns: getComputedStyle(content).gridTemplateColumns.split(' ').length,
+              settingsColumns: getComputedStyle(settings).gridTemplateColumns,
+              marketAndAdviceSideBySide: Math.abs(marketRect.top - adviceRect.top) < 2
+                && marketRect.left < adviceRect.left,
+              tabbarWidth: tabRect.width,
+              tabbarMatchesContent: Math.abs(tabRect.width - mainRect.width) < 2,
+              tabbarCentered: Math.abs((tabRect.left + tabRect.right) / 2 - window.innerWidth / 2) < 2,
+              pageOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+            };
+          });
+          ok(`桌面端 ${width}px 使用限宽双列且导航与内容对齐`,
+            desktopLayout.mainWidth > 720 && desktopLayout.mainCentered
+              && desktopLayout.contentColumns === 2
+              && (desktopLayout.settingsColumns.includes('repeat(2') || desktopLayout.settingsColumns.split(' ').length === 2)
+              && desktopLayout.marketAndAdviceSideBySide
+              && desktopLayout.tabbarMatchesContent && desktopLayout.tabbarCentered
+              && !desktopLayout.pageOverflow,
+            JSON.stringify(desktopLayout));
+        }
+        await page.setViewport({ width: 393, height: 852, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+        await page.waitForFunction(() => document.querySelector('.today-market')
+          && document.querySelector('.today-advice'), { timeout: 5000 });
+        const mobileNavLayout = await page.evaluate(() => {
+          const tabbar = document.querySelector('#tabbar').getBoundingClientRect();
+          const market = document.querySelector('.today-market').getBoundingClientRect();
+          const advice = document.querySelector('.today-advice').getBoundingClientRect();
+          return {
+            tabbarWidth: tabbar.width,
+            viewportWidth: document.documentElement.clientWidth,
+            contentStacked: advice.top > market.top,
+            pageOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+          };
+        });
+        ok('手机端底部导航保持满屏宽度',
+          Math.abs(mobileNavLayout.tabbarWidth - mobileNavLayout.viewportWidth) < 2
+            && !mobileNavLayout.pageOverflow,
+          JSON.stringify(mobileNavLayout));
+        ok('手机端内容恢复单列',
+          mobileNavLayout.contentStacked && !mobileNavLayout.pageOverflow,
+          JSON.stringify(mobileNavLayout));
+
+        await page.evaluate(() => document.querySelector('.tab-btn[data-tab="settings"]').click());
+        await page.waitForFunction(() => document.querySelector('#settingsContent .settings-filter-editor'), {
+          timeout: 5000,
+        });
+
         /* ---- 过滤条件编辑器：可开关 / 可编辑 / 可自定义 ---- */
         const edCheck = await page.evaluate(() => {
           const titles = [...document.querySelectorAll('#tab-settings .card-title')]
@@ -387,12 +459,155 @@ async function main() {
             return card ? card.querySelectorAll('.rule-row.is-off').length : -1;
           });
           ok('「恢复默认」把关闭的条件重新打开', afterReset === 0, `is-off 行 ${afterReset}`);
+
+          /* 添加自定义条件后保留当前位置 */
+          const beforeAddScroll = await page.evaluate(() => {
+            const card = [...document.querySelectorAll('#tab-settings .card')]
+              .find((c) => (c.querySelector('.card-title') || {}).innerText
+                && c.querySelector('.card-title').innerText.includes('过滤条件设置'));
+            const button = card && [...card.querySelectorAll('button')]
+              .find((b) => /添加自定义条件/.test(b.innerText || ''));
+            if (!button) return null;
+            button.scrollIntoView({ block: 'center' });
+            return window.scrollY;
+          });
+          if (beforeAddScroll !== null) {
+            await page.evaluate(() => {
+              const card = [...document.querySelectorAll('#tab-settings .card')]
+                .find((c) => (c.querySelector('.card-title') || {}).innerText
+                  && c.querySelector('.card-title').innerText.includes('过滤条件设置'));
+              const button = card && [...card.querySelectorAll('button')]
+                .find((b) => /添加自定义条件/.test(b.innerText || ''));
+              if (button) button.click();
+            });
+            await sleep(2500);
+          }
+          const afterAddScroll = await page.evaluate(() => window.scrollY);
+          ok('添加自定义条件后保持当前滚动位置',
+            beforeAddScroll !== null && Math.abs(afterAddScroll - beforeAddScroll) <= 40,
+            beforeAddScroll === null ? '未找到添加按钮'
+              : `${beforeAddScroll} → ${afterAddScroll}`);
+
+          const checkCustomRuleLayout = async (width) => {
+            await page.setViewport({ width, height: 852, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+            return page.evaluate(() => {
+              const row = document.querySelector('#tab-settings .rule-row.is-custom');
+              if (!row) return null;
+              const ctrl = row.querySelector('.rule-ctrl');
+              const rowRect = row.getBoundingClientRect();
+              const ctrlRect = ctrl.getBoundingClientRect();
+              const controls = [...ctrl.children].map((node) => {
+                const rect = node.getBoundingClientRect();
+                return rect.left >= ctrlRect.left - 1
+                  && rect.right <= ctrlRect.right + 1
+                  && rect.right <= document.documentElement.clientWidth + 1;
+              });
+              return {
+                hasField: !!ctrl.querySelector('[aria-label="条件字段"]'),
+                hasOperator: !!ctrl.querySelector('[aria-label="运算符"]'),
+                hasValue: !!ctrl.querySelector('[aria-label="阈值"]'),
+                controlsVisible: controls.length > 0 && controls.every(Boolean),
+                rowFits: rowRect.right <= document.documentElement.clientWidth + 1,
+              };
+            });
+          };
+          const layout393 = await checkCustomRuleLayout(393);
+          ok('iPhone 宽度下自定义条件控件完整可见',
+            !!layout393 && layout393.hasField && layout393.hasOperator && layout393.hasValue
+              && layout393.controlsVisible && layout393.rowFits,
+            JSON.stringify(layout393));
+          const layout320 = await checkCustomRuleLayout(320);
+          ok('窄屏下自定义条件控件完整可见',
+            !!layout320 && layout320.hasField && layout320.hasOperator && layout320.hasValue
+              && layout320.controlsVisible && layout320.rowFits,
+            JSON.stringify(layout320));
+          await page.setViewport({ width: 393, height: 852, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+
+          /* 清理新增条件，避免影响后续测试 */
+          await page.evaluate(() => {
+            const card = [...document.querySelectorAll('#tab-settings .card')]
+              .find((c) => (c.querySelector('.card-title') || {}).innerText
+                && c.querySelector('.card-title').innerText.includes('过滤条件设置'));
+            const reset = card && [...card.querySelectorAll('button')]
+              .find((b) => /恢复默认/.test(b.innerText || ''));
+            if (reset) reset.click();
+          });
+          await sleep(2500);
+
+          const staleDataNotice = await page.evaluate(async () => {
+            const { renderToday } = await import('./js/views/today.js');
+            const root = document.createElement('div');
+            const level = {
+              color: '#60a5fa', name: '中性', position: 0.6, picks: 3,
+              badge: 'badge-neutral', advice: '测试',
+            };
+            const dims = Object.fromEntries(
+              ['trend', 'breadth', 'sentiment', 'volume'].map((key) => [
+                key, { name: key, score: 50, detail: {} },
+              ])
+            );
+            renderToday(root, {
+              error: '模拟刷新失败',
+              indexes: [],
+              result: {
+                market: { score: 50, level, dims },
+                level,
+                plan: { items: [], totalAmount: 0, cashLeft: 50000, perStockBudget: 10000 },
+                poolStats: { output: 1 },
+                capital: 50000,
+                qualifiedCount: 1,
+                strategyName: '测试策略',
+                ml: { top: [] },
+                loadedAt: Date.now(),
+              },
+            });
+            return {
+              warning: (root.querySelector('.err-box') || {}).textContent || '',
+              hasResult: !!root.querySelector('.card'),
+            };
+          });
+          ok('刷新失败时保留旧结果并显示持续警告',
+            staleDataNotice.warning.includes('仍显示上次数据') && staleDataNotice.hasResult,
+            JSON.stringify(staleDataNotice));
         }
       }
     } catch (e) {
       ok(`Tab[${t.tab}] 渲染`, false, String(e.message || e));
     }
   }
+
+  section('异步页面并发重绘');
+  const settingsRenderRace = await page.evaluate(async () => {
+    const { renderSettings } = await import('/js/views/settings.js');
+    const root = document.querySelector('#settingsContent');
+    const ctx = { result: null, state: null, onReload() {}, onAnalyze() {}, onChanged() {} };
+    await Promise.all([renderSettings(root, ctx), renderSettings(root, ctx)]);
+    return {
+      basic: root.querySelectorAll(':scope > .settings-basic').length,
+      toggles: root.querySelectorAll(':scope > .settings-toggles').length,
+      editor: root.querySelectorAll(':scope > .settings-filter-editor').length,
+      backtest: root.querySelectorAll(':scope > .settings-backtest').length,
+      data: root.querySelectorAll(':scope > .settings-data').length,
+      about: root.querySelectorAll(':scope > .settings-about').length,
+    };
+  });
+  ok('并发重绘设置页不会重复生成卡片',
+    Object.values(settingsRenderRace).every((count) => count === 1),
+    JSON.stringify(settingsRenderRace));
+
+  const positionsRenderRace = await page.evaluate(async () => {
+    const { renderPositions } = await import('/js/views/positions.js');
+    const root = document.querySelector('#positionsContent');
+    const ctx = { result: null, quotes: new Map(), onChanged() {} };
+    await Promise.all([renderPositions(root, ctx), renderPositions(root, ctx)]);
+    return {
+      header: root.querySelectorAll(':scope > .positions-header').length,
+      disclaimer: root.querySelectorAll(':scope > .disclaimer').length,
+    };
+  });
+  ok('并发重绘持仓页不会重复生成内容',
+    positionsRenderRace.header === 1 && positionsRenderRace.disclaimer === 1,
+    JSON.stringify(positionsRenderRace));
 
   /* ---------- 交互：刷新按钮 ---------- */
   section('交互：刷新 / 详情弹层 / 尾盘条');
