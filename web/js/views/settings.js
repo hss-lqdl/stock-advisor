@@ -561,6 +561,9 @@ export async function renderSettings(root, ctx) {
 
   root.append(basic);
 
+  /* ---------- 过滤条件设置（可开关 / 可编辑 / 可自定义） ---------- */
+  root.append(buildFilterEditorCard(s, ctx));
+
   /* ---------- 开关 ---------- */
   const toggleCard = el('div', { class: 'card settings-toggles' });
   toggleCard.append(el('div', { class: 'card-hd' }, [
@@ -577,9 +580,6 @@ export async function renderSettings(root, ctx) {
     await settingsSave({ showDisclaimer: v });
   }));
   root.append(toggleCard);
-
-  /* ---------- 过滤条件设置（可开关 / 可编辑 / 可自定义） ---------- */
-  root.append(buildFilterEditorCard(s, ctx));
 
   /* ---------- 回测 ---------- */
   const btCard = el('div', { class: 'card settings-backtest' });
@@ -819,7 +819,7 @@ export async function renderSettings(root, ctx) {
   about.append(el('div', {
     style: { fontSize: '12.5px', lineHeight: '1.8', color: 'var(--txt-2)' },
     html:
-      '<b>A股每日买入计划</b> · 版本 1.0<br>' +
+      '<b>A股每日买入计划</b> · 版本 1.5.10<br>' +
       '数据来源：东方财富公开行情接口<br>' +
       '运行方式：本地 PWA，数据全部存在手机本地（IndexedDB），不上传任何信息<br>' +
       '分析范围：沪深 A 股（剔除 ST、退市、停牌、低流动性、创业板），总市值 20 亿–800 亿<br>' +
@@ -843,7 +843,7 @@ export async function renderSettings(root, ctx) {
   ]));
   root.append(about);
 
-  root.append(el('div', { class: 'center dim tiny', style: { padding: '8px 0 16px' }, text: 'v1.0 · 本地离线运行' }));
+  root.append(el('div', { class: 'center dim tiny', style: { padding: '8px 0 16px' }, text: 'v1.5.10 · 本地离线运行' }));
   requestAnimationFrame(() => window.scrollTo(0, scrollY));
 }
 
