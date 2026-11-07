@@ -292,8 +292,8 @@ async function main() {
         ok('设置页策略下拉包含「龙头战法」（4 种策略）', setCheck.optCount >= 4 && setCheck.hasDragon, `选项数 ${setCheck.optCount}，含龙头=${setCheck.hasDragon}`);
         ok('过滤明细卡片标题包含当前策略名', setCheck.hasFilterTitle, setCheck.filterTitleText);
         ok('过滤明细表格包含阶段分组小标题', setCheck.secRowCount >= 2, `分组行数 ${setCheck.secRowCount}`);
-        ok('设置页关于信息显示当前版本 v1.5.10',
-          setCheck.appVersion.includes('1.5.10'), setCheck.appVersion.split('\n')[0] || '未找到关于信息');
+        ok('设置页关于信息显示当前版本 v1.5.11',
+          setCheck.appVersion.includes('1.5.11'), setCheck.appVersion.split('\n')[0] || '未找到关于信息');
 
         section('桌面与移动端自适应');
         await page.evaluate(() => document.querySelector('.tab-btn[data-tab="today"]').click());
