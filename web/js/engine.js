@@ -7,23 +7,36 @@ import {
   fetchQuotes, fetchKlines, ymd, klineQuality, F_SNAP_LITE,
 } from './api.js';
 import {
-  buildUniverse, poolToMap, limitPrices, cloneStats,
+  buildUniverse, normalizeStock, poolToMap, limitPrices, cloneStats,
 } from './universe.js';
 import { analyzeMainline, annotatePool, mainlineTrend } from './mainline.js';
-import { resolveFilterConfig } from './filters.js';
+import { resolveFilterConfig, serializeConfig, setRule } from './filters.js';
 import { analyzeMarket, levelByScore } from './market.js';
 import { computeFactors } from './indicators.js';
 import {
   scoreCandidates, applyPortfolioConstraints, buildReason,
-  applyStage1, applyStage2, relaxStage2, computeLeader,
+  applyStage1, applyStage2, relaxStage2, computeLeader, computeLimitUp,
   STRATEGY_KEYS, getStrategy, strategyFilter,
 } from './strategy.js';
 import { buildDailyPlan } from './plan.js';
+import { TAIL_START_MIN, TAIL_END_MIN, TAIL_START_H, TAIL_START_M } from './constants.js';
 import {
   settingsLoad, snapshotSaveAll, snapshotLoadAll, boardsSaveAll, boardsLoadAll,
   klinesSaveMany, klinesGetMany, klinesCount, klineAppendToday,
   boardDailySave, planSave, metaGet, metaSet,
 } from './store.js';
+
+/**
+ * 涨停板战法专用股票池：与基础池相同，但不剔除已封板 / 一字板（可排板买入）。
+ * @returns {{pool:Array, qualified:Array}}
+ */
+export function limitupPool(rows, settings, ml) {
+  const base = resolveFilterConfig(settings && settings.filterConfig, settings || {});
+  const cfg = serializeConfig({ ...base, base: setRule(base.base, 'limitUp', { on: false }) });
+  const { pool } = buildUniverse(rows, { ...(settings || {}), filterConfig: cfg });
+  const { qualified } = annotatePool(pool, ml);
+  return { pool, qualified };
+}
 
 /** 拉 K 线的候选上限（平衡流量与覆盖面） */
 export const KLINE_CAP = 180;
@@ -45,8 +58,8 @@ export function marketPhase(now = new Date()) {
   if (m < 9 * 60 + 30) return 'auction';
   if (m < 11 * 60 + 30) return 'morning';
   if (m < 13 * 60) return 'lunch';
-  if (m < 14 * 60 + 55) return 'afternoon';
-  if (m < 15 * 60) return 'tail';        // 14:55-15:00 尾盘集合竞价
+  if (m < TAIL_START_MIN) return 'afternoon';
+  if (m < TAIL_END_MIN) return 'tail';   // 尾盘挂单窗口（14:55–15:00，见 constants.js）
   return 'closed';
 }
 
@@ -60,7 +73,7 @@ export function isTradingDate(indexKl, now = new Date()) {
 /** 距离尾盘窗口开始的毫秒数（负数表示已进入/已过） */
 export function msToTail(now = new Date()) {
   const t = new Date(now);
-  t.setHours(14, 55, 0, 0);
+  t.setHours(TAIL_START_H, TAIL_START_M, 0, 0);
   return t.getTime() - now.getTime();
 }
 
@@ -122,12 +135,14 @@ export async function loadAll(opt = {}) {
     text: `主线 ${ml.top.length} 个，过门槛 ${qualified.length} 只`,
   });
 
-  // 6. 拉 K 线：四个策略各自的 stage1 候选按配额取样，保证每个策略都有 K 线可用
+  // 6. 拉 K 线：五个策略各自的 stage1 候选按配额取样，保证每个策略都有 K 线可用
   const quota = Math.ceil(KLINE_CAP / STRATEGY_KEYS.length);
   const wantCodes = new Set();
   const want = [];
+  const ztQualified = limitupPool(rows, settings, ml).qualified;
   for (const k of STRATEGY_KEYS) {
-    for (const s of applyStage1(qualified, k, null, filterConfig, filterCtx).slice(0, quota)) {
+    const src = k === 'limitup' ? ztQualified : qualified;
+    for (const s of applyStage1(src, k, null, filterConfig, filterCtx).slice(0, quota)) {
       if (wantCodes.has(s.code)) continue;
       wantCodes.add(s.code);
       want.push(s);
@@ -185,8 +200,8 @@ export async function loadAll(opt = {}) {
     }
   }
 
-  // 7. 用当日快照补齐今日未完成 bar
-  const poolMap = poolToMap(pool);
+  // 7. 用当日快照补齐今日未完成 bar（含涨停板战法池里的已封板股）
+  const poolMap = poolToMap(pool.concat(ztQualified));
   for (const [code, kl] of cached) {
     const s = poolMap.get(code);
     if (!s || !isFinite(s.open) || !isFinite(s.price)) continue;
@@ -335,14 +350,25 @@ export function analyze(state, opt = {}) {
   const level = market.level;
 
   // 2. 主线（门槛可配置：TopN / 退潮剔除 / 是否启用）
-  const filterConfig = state.filterConfig
-    || resolveFilterConfig(settings.filterConfig, settings);
+  // 过滤配置以「当前设置」为唯一真值源：用户刚保存的条件必须立刻生效，
+  // 不能退回用 state 里加载时算好的那份（那正是「改了条件不同步生效」的来源）。
+  const filterConfig = resolveFilterConfig(settings.filterConfig, settings);
   const filterCtx = {
     budgetPerStock: state.budgetPerStock || (capital * 0.80) / Math.max(1, settings.maxPicks || 5),
     topN: filterConfig.mainline.topN,
   };
   const ml = state.ml;
-  const { qualified, stats: mlStats } = annotatePool(state.pool, ml);
+  const annotated = annotatePool(state.pool, ml);
+  const mlStats = annotated.stats;
+  // 涨停板战法：股票池不剔除已封板，可排板买入
+  const qualified = strategy === 'limitup'
+    ? limitupPool(state.rows || [], settings, ml).qualified
+    : annotated.qualified;
+  let marketRows = [];
+  if (strategy === 'dragon' || strategy === 'limitup') {
+    const marketSnapshot = (state.rows || []).map(normalizeStock);
+    marketRows = annotatePool(marketSnapshot, ml).all;
+  }
 
   // 3. 过滤明细：基础链 → 主线门槛 → 该策略 stage1（快照级门槛）
   const poolStats = cloneStats(state.poolStats);
@@ -356,7 +382,7 @@ export function analyze(state, opt = {}) {
   poolStats.section(`${strategyName} · 专属门槛`);
   const stage1Rows = applyStage1(qualified, strategy, poolStats, filterConfig, filterCtx);
 
-  // 3.5 四个策略的初筛候选规模对比（同一 qualified 集合，仅 stage1，不带统计）
+  // 3.5 五个策略的初筛候选规模对比（同一 qualified 集合，仅 stage1，不带统计）
   const strategyPoolCounts = {};
   for (const k of STRATEGY_KEYS) {
     strategyPoolCounts[k] = applyStage1(qualified, k, null, filterConfig, filterCtx).length;
@@ -377,9 +403,12 @@ export function analyze(state, opt = {}) {
     });
   }
 
-  // 4.5 同行业龙头度：在「本策略 stage1 候选」里做横截面分位。
-  //     口径说明：分位是在同一批强势候选内排的，因此 leader 高 = 这批强势股里的领先者。
-  const withLeader = computeLeader(withFactors);
+  // 4.5 龙头策略使用全市场快照作为关注度、活跃度与综合龙头度的排名基准。
+  const withLeader = strategy === 'dragon'
+    ? computeLeader(withFactors, marketRows)
+    : strategy === 'limitup'
+      ? computeLimitUp(withFactors, marketRows, state.ztPool)
+      : withFactors;
 
   // 5. stage2（K 线因子门槛）+ 保底放宽
   const stage2Rows = applyStage2(withLeader, strategy, poolStats, filterConfig, filterCtx);
@@ -401,6 +430,7 @@ export function analyze(state, opt = {}) {
     capital,
     level,
     klines: state.klines,
+    strategyKey: strategy,
   });
 
   // 补入选理由

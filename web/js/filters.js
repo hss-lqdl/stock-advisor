@@ -89,37 +89,62 @@ export function isLimitDown(s) {
    group：UI 下拉分组（snap = 快照可用 / factor = 需要 K 线 / text = 文本）
    ============================================================ */
 
-const numField = (label, unit, scale, get, group = 'snap') =>
-  ({ label, unit, scale, get, group, type: 'num' });
+const numField = (label, unit, scale, get, group = 'snap', range = [-1e9, 1e9]) =>
+  ({
+    label, unit, scale, get, group, type: 'num', min: range[0], max: range[1],
+  });
 const textField = (label, get) =>
   ({ label, unit: '', scale: 1, get, group: 'text', type: 'text' });
 
+/**
+ * 数值字段的合理取值区间（显示单位）：自定义条件的手输阈值会被夹到这个区间内，
+ * 避免「成交额 ≥ 1e9 亿」这类能通过校验但永远筛不出股票的输入。
+ */
+export function fieldRange(fieldKey) {
+  const f = FILTER_FIELDS[fieldKey];
+  if (!f || f.type === 'text') return null;
+  return [f.min, f.max];
+}
+
+/** 把阈值夹进字段的合理区间（文本字段原样返回） */
+export function clampFieldValue(fieldKey, v) {
+  const r = fieldRange(fieldKey);
+  const n = Number(v);
+  if (!isFinite(n)) return v;
+  if (!r) return n;
+  return Math.min(r[1], Math.max(r[0], n));
+}
+
 export const FILTER_FIELDS = {
   /* --- 快照字段：基础过滤与 stage1 可用 --- */
-  price: numField('价格', '元', 1, (s) => s.price),
-  chgPct: numField('当日涨幅', '%', 1, (s) => s.chgPct),
-  turnover: numField('换手率', '%', 1, (s) => s.turnover),
-  volRatio: numField('量比', '', 1, (s) => s.volRatio),
-  amount: numField('成交额', '亿', 1e-8, (s) => s.amount),
-  mktCap: numField('总市值', '亿', 1e-8, (s) => s.mktCap),
-  floatCap: numField('流通市值', '亿', 1e-8, (s) => s.floatCap),
-  pe: numField('市盈率', '', 1, (s) => s.pe),
-  pb: numField('市净率', '', 1, (s) => s.pb),
-  mainInflow: numField('主力净流入', '亿', 1e-8, (s) => s.mainInflow),
-  mainScore: numField('主线强度分', '', 1, (s) => s.mainScore),
-  mainRank: numField('所属主线排名', '', 1, (s) => s.mainRank),
+  price: numField('价格', '元', 1, (s) => s.price, 'snap', [0.01, 10000]),
+  chgPct: numField('当日涨幅', '%', 1, (s) => s.chgPct, 'snap', [-21, 21]),
+  turnover: numField('换手率', '%', 1, (s) => s.turnover, 'snap', [0, 100]),
+  volRatio: numField('量比', '', 1, (s) => s.volRatio, 'snap', [0, 100]),
+  amount: numField('成交额', '亿', 1e-8, (s) => s.amount, 'snap', [0, 10000]),
+  mktCap: numField('总市值', '亿', 1e-8, (s) => s.mktCap, 'snap', [0, 100000]),
+  floatCap: numField('流通市值', '亿', 1e-8, (s) => s.floatCap, 'snap', [0, 100000]),
+  pe: numField('市盈率', '', 1, (s) => s.pe, 'snap', [-1000, 10000]),
+  pb: numField('市净率', '', 1, (s) => s.pb, 'snap', [0, 1000]),
+  mainInflow: numField('主力净流入', '亿', 1e-8, (s) => s.mainInflow, 'snap', [-1000, 1000]),
+  mainScore: numField('主线强度分', '', 1, (s) => s.mainScore, 'snap', [0, 100]),
+  mainRank: numField('所属主线排名', '', 1, (s) => s.mainRank, 'snap', [1, 9999]),
 
   /* --- K 线因子字段：stage2 可用 --- */
-  mom20: numField('20日动量', '%', 100, (s) => s.mom20, 'factor'),
-  mom5: numField('5日动量', '%', 100, (s) => s.mom5, 'factor'),
+  mom20: numField('20日动量', '%', 100, (s) => s.mom20, 'factor', [-100, 1000]),
+  mom5: numField('5日动量', '%', 100, (s) => s.mom5, 'factor', [-100, 1000]),
   // dd 是「距 60 日高的涨跌幅」（≤0，越负越深）；这里暴露成「回撤幅度」（正数）更直观
-  ddMag: numField('60日回撤幅度', '%', 100, (s) => (isNum(s.dd) ? -s.dd : NaN), 'factor'),
-  trend: numField('趋势强度', '%', 100, (s) => s.trend, 'factor'),
-  rsi: numField('RSI', '', 1, (s) => s.rsi, 'factor'),
-  atrp: numField('波动率ATR', '%', 100, (s) => s.atrp, 'factor'),
-  maAlign: numField('均线多头数', '/3', 1, (s) => s.maAlign, 'factor'),
-  vr: numField('量比(K线)', '', 1, (s) => s.vr, 'factor'),
-  leader: numField('板块龙头度', '', 1, (s) => s.leader, 'factor'),
+  ddMag: numField('60日回撤幅度', '%', 100, (s) => (isNum(s.dd) ? -s.dd : NaN), 'factor', [0, 100]),
+  trend: numField('趋势强度', '%', 100, (s) => s.trend, 'factor', [-100, 100]),
+  rsi: numField('RSI', '', 1, (s) => s.rsi, 'factor', [0, 100]),
+  atrp: numField('波动率ATR', '%', 100, (s) => s.atrp, 'factor', [0, 100]),
+  maAlign: numField('均线多头数', '/3', 1, (s) => s.maAlign, 'factor', [0, 3]),
+  vr: numField('量比(K线)', '', 1, (s) => s.vr, 'factor', [0, 100]),
+  leader: numField('全市场龙头度', '', 1, (s) => s.leader, 'factor', [0, 100]),
+  activity: numField('市场活跃度', '', 1, (s) => s.activity, 'factor', [0, 100]),
+  ztTiming: numField('早盘/尾盘异动分', '', 1, (s) => s.ztTiming, 'factor', [0, 100]),
+  ztSeal: numField('封板强度', '', 1, (s) => s.ztSeal, 'factor', [0, 100]),
+  ztHeat: numField('涨停热度', '', 1, (s) => s.ztHeat, 'factor', [0, 100]),
 
   /* --- 文本字段：用 contains / notContains / startsWith --- */
   name: textField('股票名称', (s) => s.name),
@@ -266,6 +291,22 @@ export const STAGE_RULE_DEFAULTS = {
       { id: 'd2_mom20', on: true, kind: 'field', field: 'mom20', op: '>', value: 0 },
       { id: 'd2_vr', on: true, kind: 'field', field: 'vr', op: '>=', value: 1.0, note: '（放量）' },
       { id: 'd2_ddMag', on: true, kind: 'field', field: 'ddMag', op: '<=', value: 15 },
+    ],
+  },
+  /* 涨停板战法：不剔除已封板（基础规则 limitUp 对本策略不生效，见 engine.limitupPool） */
+  limitup: {
+    stage1: [
+      { id: 'z1_chgPct', on: true, kind: 'field', field: 'chgPct', op: '>=', value: 5, note: '（强势异动）' },
+      { id: 'z1_turnover', on: true, kind: 'field', field: 'turnover', op: 'between', value: 3, value2: 30, note: '（高参与）' },
+      { id: 'z1_amount', on: true, kind: 'field', field: 'amount', op: '>=', value: 3 },
+      { id: 'z1_volRatio', on: true, kind: 'field', field: 'volRatio', op: '>=', value: 1.5, note: '（放量）' },
+      { id: 'z1_mktCap', on: true, kind: 'field', field: 'mktCap', op: '<=', value: 500 },
+    ],
+    stage2: [
+      { id: 'z2_activity', on: true, kind: 'field', field: 'activity', op: '>=', value: 70 },
+      { id: 'z2_timing', on: true, kind: 'field', field: 'ztTiming', op: '>=', value: 40, note: '（早盘/尾盘异动）' },
+      { id: 'z2_vr', on: true, kind: 'field', field: 'vr', op: '>=', value: 1.2 },
+      { id: 'z2_maAlign', on: true, kind: 'field', field: 'maAlign', op: '>=', value: 2 },
     ],
   },
 };

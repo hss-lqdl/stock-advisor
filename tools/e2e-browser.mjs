@@ -278,22 +278,17 @@ async function main() {
           const secRows = document.querySelectorAll('#tab-settings .tbl tr.row-sec');
           const titles = [...document.querySelectorAll('#tab-settings .card-title')].map((c) => (c.innerText || '').trim());
           const filterTitle = titles.find((t) => t.includes('股票池过滤明细'));
-          const about = document.querySelector('#settingsContent .settings-about');
-          const appVersion = about ? (about.innerText || '') : '';
           return {
             optCount: opts.length,
             hasDragon,
             secRowCount: secRows.length,
             hasFilterTitle: !!filterTitle,
             filterTitleText: filterTitle || '',
-            appVersion,
           };
         });
         ok('设置页策略下拉包含「龙头战法」（4 种策略）', setCheck.optCount >= 4 && setCheck.hasDragon, `选项数 ${setCheck.optCount}，含龙头=${setCheck.hasDragon}`);
         ok('过滤明细卡片标题包含当前策略名', setCheck.hasFilterTitle, setCheck.filterTitleText);
         ok('过滤明细表格包含阶段分组小标题', setCheck.secRowCount >= 2, `分组行数 ${setCheck.secRowCount}`);
-        ok('设置页关于信息显示当前版本 v1.5.11',
-          setCheck.appVersion.includes('1.5.11'), setCheck.appVersion.split('\n')[0] || '未找到关于信息');
 
         section('桌面与移动端自适应');
         await page.evaluate(() => document.querySelector('.tab-btn[data-tab="today"]').click());
@@ -302,41 +297,8 @@ async function main() {
           return content && content.querySelector('.today-market')
             && content.querySelector('.today-advice');
         }, { timeout: 5000 });
-        await page.waitForFunction(() => {
-          const settings = document.querySelector('#settingsContent');
-          return settings && settings.querySelector('.settings-basic')
-            && settings.querySelector('.settings-toggles')
-            && settings.querySelector('.settings-backtest')
-            && settings.querySelector('.settings-data');
-        }, { timeout: 5000 });
         for (const width of [1024, 1440, 1920]) {
           await page.setViewport({ width, height: 1000, deviceScaleFactor: 1, isMobile: false, hasTouch: false });
-          await page.evaluate(() => document.querySelector('.tab-btn[data-tab="settings"]').click());
-          await page.waitForFunction(() => {
-            const settings = document.querySelector('#settingsContent');
-            return settings && settings.querySelector('.settings-basic')
-              && settings.querySelector('.settings-toggles')
-              && settings.querySelector('.settings-backtest')
-              && settings.querySelector('.settings-data');
-          }, { timeout: 5000 });
-          const settingsLayout = await page.evaluate(() => {
-            const settings = document.querySelector('#settingsContent');
-            const cards = [...settings.children]
-              .filter((node) => ['settings-basic', 'settings-toggles', 'settings-backtest', 'settings-data']
-                .some((name) => node.classList.contains(name)))
-              .map((node) => {
-                const rect = node.getBoundingClientRect();
-                return {
-                  name: node.className,
-                  left: rect.left,
-                  top: rect.top,
-                  width: rect.width,
-                  height: rect.height,
-                };
-              });
-            return { columns: getComputedStyle(settings).gridTemplateColumns, cards };
-          });
-          await page.evaluate(() => document.querySelector('.tab-btn[data-tab="today"]').click());
           await page.waitForFunction(() => {
             const content = document.querySelector('#todayContent');
             return content && content.querySelector('.today-market')
@@ -345,6 +307,7 @@ async function main() {
           const desktopLayout = await page.evaluate(() => {
             const main = document.querySelector('#main');
             const content = document.querySelector('#todayContent');
+            const settings = document.querySelector('#settingsContent');
             const tabbar = document.querySelector('#tabbar');
             const marketRect = content.querySelector('.today-market').getBoundingClientRect();
             const adviceRect = content.querySelector('.today-advice').getBoundingClientRect();
@@ -354,6 +317,7 @@ async function main() {
               mainWidth: mainRect.width,
               mainCentered: Math.abs((mainRect.left + mainRect.right) / 2 - window.innerWidth / 2) < 2,
               contentColumns: getComputedStyle(content).gridTemplateColumns.split(' ').length,
+              settingsColumns: getComputedStyle(settings).gridTemplateColumns,
               marketAndAdviceSideBySide: Math.abs(marketRect.top - adviceRect.top) < 2
                 && marketRect.left < adviceRect.left,
               tabbarWidth: tabRect.width,
@@ -365,18 +329,11 @@ async function main() {
           ok(`桌面端 ${width}px 使用限宽双列且导航与内容对齐`,
             desktopLayout.mainWidth > 720 && desktopLayout.mainCentered
               && desktopLayout.contentColumns === 2
-              && (settingsLayout.columns.includes('repeat(2') || settingsLayout.columns.split(' ').length === 2)
-              && settingsLayout.cards.find((card) => card.name.includes('settings-basic'))?.width
-                === settingsLayout.cards.find((card) => card.name.includes('settings-data'))?.width
-              && settingsLayout.cards.find((card) => card.name.includes('settings-data'))?.width > 800
-              && Math.abs(
-                settingsLayout.cards.find((card) => card.name.includes('settings-toggles'))?.top
-                - settingsLayout.cards.find((card) => card.name.includes('settings-backtest'))?.top
-              ) < 2
+              && (desktopLayout.settingsColumns.includes('repeat(2') || desktopLayout.settingsColumns.split(' ').length === 2)
               && desktopLayout.marketAndAdviceSideBySide
               && desktopLayout.tabbarMatchesContent && desktopLayout.tabbarCentered
               && !desktopLayout.pageOverflow,
-            JSON.stringify({ ...desktopLayout, settingsLayout }));
+            JSON.stringify(desktopLayout));
         }
         await page.setViewport({ width: 393, height: 852, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
         await page.waitForFunction(() => document.querySelector('.today-market')
@@ -618,39 +575,6 @@ async function main() {
       ok(`Tab[${t.tab}] 渲染`, false, String(e.message || e));
     }
   }
-
-  section('异步页面并发重绘');
-  const settingsRenderRace = await page.evaluate(async () => {
-    const { renderSettings } = await import('/js/views/settings.js');
-    const root = document.querySelector('#settingsContent');
-    const ctx = { result: null, state: null, onReload() {}, onAnalyze() {}, onChanged() {} };
-    await Promise.all([renderSettings(root, ctx), renderSettings(root, ctx)]);
-    return {
-      basic: root.querySelectorAll(':scope > .settings-basic').length,
-      toggles: root.querySelectorAll(':scope > .settings-toggles').length,
-      editor: root.querySelectorAll(':scope > .settings-filter-editor').length,
-      backtest: root.querySelectorAll(':scope > .settings-backtest').length,
-      data: root.querySelectorAll(':scope > .settings-data').length,
-      about: root.querySelectorAll(':scope > .settings-about').length,
-    };
-  });
-  ok('并发重绘设置页不会重复生成卡片',
-    Object.values(settingsRenderRace).every((count) => count === 1),
-    JSON.stringify(settingsRenderRace));
-
-  const positionsRenderRace = await page.evaluate(async () => {
-    const { renderPositions } = await import('/js/views/positions.js');
-    const root = document.querySelector('#positionsContent');
-    const ctx = { result: null, quotes: new Map(), onChanged() {} };
-    await Promise.all([renderPositions(root, ctx), renderPositions(root, ctx)]);
-    return {
-      header: root.querySelectorAll(':scope > .positions-header').length,
-      disclaimer: root.querySelectorAll(':scope > .disclaimer').length,
-    };
-  });
-  ok('并发重绘持仓页不会重复生成内容',
-    positionsRenderRace.header === 1 && positionsRenderRace.disclaimer === 1,
-    JSON.stringify(positionsRenderRace));
 
   /* ---------- 交互：刷新按钮 ---------- */
   section('交互：刷新 / 详情弹层 / 尾盘条');

@@ -9,7 +9,8 @@ import {
 import {
   buildCopyText, buildConditionText, buildConditionOrders,
 } from '../plan.js';
-import { FACTOR_LABELS, factorLabel } from '../strategy.js';
+import { FACTOR_LABELS, factorLabel, getStrategy, strategyWeightText } from '../strategy.js';
+import { TAIL_HHMM, CLOSE_HHMM, CLOSE_AUCTION_HHMM } from '../constants.js';
 
 /** 因子分位条（因子名按当前策略标注「反向」） */
 function factorRows(factors, strategyKey) {
@@ -33,6 +34,7 @@ function factorRows(factors, strategyKey) {
 function pickCard(it, index, ctx) {
   const rank = index + 1;
   const card = el('div', { class: 'pick' + (rank <= 3 ? ' rank-' + rank : '') });
+  const stName = getStrategy((ctx && ctx.result && ctx.result.strategy) || 'balanced').name;
 
   // 头部
   card.append(el('div', { class: 'pick-hd' }, [
@@ -51,7 +53,7 @@ function pickCard(it, index, ctx) {
     ]),
     el('div', { class: 'pick-score' }, [
       el('div', { class: 's', text: it.score.toFixed(1) }),
-      el('div', { class: 'l', text: '综合评分' }),
+      el('div', { class: 'l', text: `综合评分 · ${stName}` }),
     ]),
   ]));
 
@@ -217,7 +219,7 @@ function showAllConditions(result) {
     class: 'disclaimer mt14',
     html: '<b>三种下单路径：</b><br>' +
       '<b>A. 条件单（推荐）</b> — 在同花顺一次性设置好，之后自动触发，无需盯盘。<br>' +
-      '<b>B. 照单下单</b> — 复制清单，尾盘 14:55 手动逐只下单。<br>' +
+      '<b>B. 照单下单</b> — 复制清单，尾盘 ' + TAIL_HHMM + ' 手动逐只下单（涨停板战法的排板单在封板后尽早挂）。<br>' +
       '<b>C. 模拟盘</b> — 在「持仓」页记录，系统跟踪盈亏并提示止损止盈。',
   }));
   node.append(el('button', {
@@ -324,8 +326,10 @@ export function renderPicks(root, ctx) {
   // 说明
   root.append(el('div', {
     class: 'disclaimer',
-    html: `<b>买入窗口：</b>尾盘 <b>14:55–15:00</b>（14:57 后进入收盘集合竞价）。` +
+    html: `<b>买入窗口：</b>尾盘 <b>${TAIL_HHMM}–${CLOSE_HHMM}</b>（${CLOSE_AUCTION_HHMM} 后进入收盘集合竞价）；涨停板战法的排板单在封板后尽早挂涨停价。` +
       `<br><b>委托价：</b>已按「现价 × 1.008，且不高于涨停价 × 0.995」计算，挂此价基本可成交。` +
+      `<br><b>数据说明：</b>涨停池的首次/最后封板时间与炸板次数是<b>刷新时刻的累计值</b>，` +
+      '盘中会随每一次封板、炸板变化；收盘后刷新即为全天最终值，尾盘下单前建议再刷新一次。' +
       `<br><b>纪律：</b>单只亏损达到止损价立即离场；到止盈①减半仓，到止盈②清仓。`,
   }));
 
@@ -337,18 +341,19 @@ export function renderPicks(root, ctx) {
     root.append(pickCard(it, i, ctx));
   });
 
-  // 策略说明
+  // 策略说明（按当前生效策略的因子权重自动生成，切换策略后随之变化）
+  const stKey = r.strategy || 'balanced';
+  const stDef = getStrategy(stKey);
   root.append(el('div', { class: 'card' }, [
-    el('div', { class: 'card-title', text: '本次评分策略' }),
-    el('div', { class: 'dim mt10', style: { lineHeight: '1.7' }, text: getStrategyDesc(r.strategy) }),
+    el('div', { class: 'card-hd' }, [
+      el('div', { class: 'card-title', text: '本次评分策略' }),
+      el('div', { class: 'card-sub', text: stDef.name }),
+    ]),
+    el('div', { class: 'dim mt10', style: { lineHeight: '1.7' }, text: strategyWeightText(stKey) }),
+    el('div', {
+      class: 'dim tiny mt6',
+      text: `专属门槛：快照 ${(r.strategyFilters && r.strategyFilters.stage1 || []).join('、') || '无'}`
+        + `；因子 ${(r.strategyFilters && r.strategyFilters.stage2 || []).join('、') || '无'}`,
+    }),
   ]));
-}
-
-function getStrategyDesc(key) {
-  const map = {
-    balanced: '均衡多因子：动量20% + 趋势20% + 主线20% + 量比10% + 回撤10% + 5日动量10% + RSI5% + 波动5%。适合震荡与结构市。',
-    momentum: '趋势动量：趋势30% + 20日动量25% + 5日动量15% + 量比10% + 主线5%。适合单边上行市，追强势主线。',
-    reversal: '超跌反弹：回撤25% + 主线20% + RSI15% + 趋势10% + 20日动量10% + 量比10%。适合急跌后的修复行情。',
-  };
-  return map[key] || map.balanced;
 }

@@ -82,6 +82,11 @@ async function testUniverse() {
   eq(U.limitPct('000001'), 0.10, '000 开头 → 10% 涨跌幅');
   eq(U.limitPct('002001'), 0.10, '002 开头 → 10% 涨跌幅');
 
+  // 涨跌停幅度只保留一份实现：universe.js 只是把 filters.js 的函数原样转出
+  const F = await import(url('filters.js'));
+  eq(U.limitPct, F.limitPct, 'limitPct 只有一份实现（universe.js 转出 filters.js）');
+  eq(U.isChiNext, F.isChiNext, 'isChiNext 只有一份实现');
+
   // isST
   ok(U.isST('ST中珠'), 'ST 中珠 → 是 ST');
   ok(U.isST('*ST海航'), '*ST 海航 → 是 ST');
@@ -202,6 +207,33 @@ async function testFilters() {
   // ddMag：把「距60日高回撤」转成更直观的「回撤幅度（正数越深）」
   eq(F.FILTER_FIELDS.ddMag.get({ dd: -0.2 }), 0.2, 'dd=-20% → 回撤幅度 20%');
   ok(Number.isNaN(F.FILTER_FIELDS.ddMag.get({})), 'dd 缺失 → NaN（后续 fail-open）');
+
+  /* ---------- 数值字段取值区间（自定义条件阈值钳制） ---------- */
+  for (const [k, f] of Object.entries(F.FILTER_FIELDS)) {
+    if (f.type !== 'num') continue;
+    ok(isFinite(f.min) && isFinite(f.max) && f.min < f.max,
+      `字段 ${k} 有合理上下限`, `${f.min}~${f.max}`);
+  }
+  eq(F.fieldRange('name'), null, '文本字段没有数值区间');
+  eq(F.clampFieldValue('amount', 1e9), 10000, '成交额超上限被夹回 10000 亿');
+  eq(F.clampFieldValue('amount', -5), 0, '成交额低于下限被夹回 0 亿');
+  eq(F.clampFieldValue('chgPct', -50), -21, '涨幅低于下限被夹回 -21%');
+  eq(F.clampFieldValue('rsi', 120), 100, 'RSI 超上限被夹回 100');
+  eq(F.clampFieldValue('price', 3.5), 3.5, '区间内的值原样保留');
+  ok(Number.isNaN(F.clampFieldValue('rsi', NaN)), 'NaN 原样返回（不误夹成边界值）');
+
+  // 内置默认规则的阈值必须都落在各自字段的区间内
+  for (const r of F.BASE_RULE_DEFAULTS) {
+    if (r.kind !== 'field' || !r.field) continue;
+    const rg = F.fieldRange(r.field);
+    if (!rg) continue;
+    ok(r.value >= rg[0] && r.value <= rg[1],
+      `默认规则 ${r.id} 阈值在区间内`, `${r.value} ∈ ${rg[0]}~${rg[1]}`);
+    if (r.op === 'between' && r.value2 != null) {
+      ok(r.value2 >= rg[0] && r.value2 <= rg[1],
+        `默认规则 ${r.id} 上限在区间内`, `${r.value2}`);
+    }
+  }
 
   /* ---------- 运算符表 ---------- */
   eq(F.OPS.between.arity, 2, 'between 需要两个值');
@@ -325,7 +357,7 @@ async function testFilters() {
     .pool.some((s) => s.code === '600004'), '默认市值条件下，10 亿小市值股票被剔除');
 
   /* ---------- strategy.js：编译式过滤链 ---------- */
-  eq(Object.keys(S.STRATEGY_FILTERS).length, 4, '四个策略的默认过滤链均已编译');
+  eq(Object.keys(S.STRATEGY_FILTERS).length, 5, '五个策略的默认过滤链均已编译');
   ok(typeof S.strategyRules === 'function', 'strategy.js 导出 strategyRules（编辑器用）');
   const rulesBal = S.strategyRules('balanced', def);
   ok(Array.isArray(rulesBal.stage1) && rulesBal.stage1.length > 0, 'strategyRules 返回规则对象数组');
@@ -378,6 +410,53 @@ async function testFilters() {
   /* ---------- engine.js：rebuildPool 存在 ---------- */
   const E = await import(url('engine.js'));
   eq(typeof E.rebuildPool, 'function', 'engine.js 导出 rebuildPool（改条件后无需联网重算）');
+
+  /* ---------- 策略/过滤条件改完必须立刻同步到计划 ---------- */
+  const mkSyncRow = (code, name, price, capYi, amtYi) => ({
+    f12: code, f14: name, f2: price, f3: 2, f5: 1e5, f6: amtYi * 1e8,
+    f8: 5, f9: 20, f10: 1.5, f15: price * 1.02, f16: price * 0.99,
+    f17: price, f18: price / 1.02, f20: capYi * 1e8, f21: capYi * 1e8,
+    f23: 2, f62: 1e7, f100: '电子', f103: '消费电子',
+  });
+  const syncRows = [
+    mkSyncRow('600001', '甲科技', 12, 50, 3),
+    mkSyncRow('600002', '乙材料', 8, 60, 4),
+    mkSyncRow('600003', '丙装备', 20, 70, 5),
+  ];
+  const baseSettings = { capital: 50000, maxPicks: 5, strategy: 'balanced', filterConfig: null };
+  const fakeState = {
+    rows: syncRows, boards: [], indexKl: [], klines: new Map(), ztPool: [], dtPool: [],
+    settings: baseSettings, poolStats: new (U.FilterStats)(),
+  };
+  const st1 = E.rebuildPool(fakeState, baseSettings);
+  ok(st1.pool.length >= 2, '默认条件下股票池非空', `pool=${st1.pool.length}`);
+
+  // 收紧基础过滤（成交额 ≥ 9999 亿）→ 重建后池子必须立刻变空
+  const tightCfg = {
+    v: 1,
+    base: [{ id: 'amountMin', on: true, kind: 'field', field: 'amount', op: '>=', value: 9999, value2: null }],
+    mainline: {},
+    strategies: {},
+  };
+  const tight = { ...baseSettings, filterConfig: tightCfg };
+  const st2 = E.rebuildPool(fakeState, tight);
+  eq(st2.pool.length, 0, '改完过滤条件 → 重建池子立刻生效（成交额门槛卡死为空）');
+  eq(st2.filterConfig.base.find((r) => r.id === 'amountMin').value, 9999, '新配置被解析进 state.filterConfig');
+
+  // analyze 必须以「当前设置」为准，不能复用 state 里加载时的旧过滤配置
+  const resTight = E.analyze({ ...st1, filterConfig: st1.filterConfig }, { settings: tight });
+  eq(resTight.filterConfig.base.find((r) => r.id === 'amountMin').value, 9999,
+    'analyze 用设置里的过滤配置，不复用 state 的旧配置');
+  eq(resTight.plan.items.length, 0, '过滤条件收紧后，今日买入计划不再推荐旧池子的票');
+
+  // 切换策略 → 计划按新策略生成
+  const resBal = E.analyze(st1, { settings: baseSettings });
+  const resLimit = E.analyze(st1, { settings: { ...baseSettings, strategy: 'limitup' } });
+  eq(resBal.strategy, 'balanced', '默认策略为 balanced');
+  eq(resLimit.strategy, 'limitup', '切换策略后 analyze 按 limitup 计算');
+  eq(resLimit.strategyFilters.key, 'limitup', '专属门槛来自新策略');
+  ok(resLimit.strategyName === S.STRATEGIES.limitup.name, '结果里的策略名同步为新策略',
+    `${resLimit.strategyName} / ${S.STRATEGIES.limitup.name}`);
 }
 
 
@@ -487,7 +566,9 @@ async function testMainline() {
     { code: '600002', concepts: '不存在X', industry: '不存在Y' },
     { code: '600003', concepts: '半导体设备', industry: '半导体设备' },
   ];
-  const { qualified, stats } = M.annotatePool(pool, ml2);
+  const { all, qualified, stats } = M.annotatePool(pool, ml2);
+  eq(all.length, pool.length, 'annotatePool 保留全市场标注结果');
+  ok(all.some((s) => s.code === '600002'), 'all 包含未通过主线门槛的股票');
   ok(qualified.length === 1, 'annotatePool 只保留过门槛的 1 只', '实际 ' + qualified.length);
   eq(qualified[0].code, '600001', '过门槛的是 600001');
   eq(stats.pool, 3, 'stats.pool = 3');
@@ -702,6 +783,95 @@ async function testStrategy() {
     ok(typeof S.FACTOR_LABELS[k] === 'string', '因子有中文名: ' + k);
   }
 
+  /* ---- 评分说明文字跟着策略权重走（不再手写死） ---- */
+  for (const k of keys) {
+    const txt = S.strategyWeightText(k);
+    const st = S.getStrategy(k);
+    ok(txt.startsWith(st.name + '：'), `评分说明以策略名开头: ${k}`);
+    ok(txt.includes(st.desc), `评分说明包含策略适用场景: ${k}`);
+    const pcts = [...txt.matchAll(/(\d+)%/g)].map((m) => parseInt(m[1], 10));
+    eq(pcts.length, Object.keys(st.weights).length, `评分说明列出全部 ${Object.keys(st.weights).length} 个因子: ${k}`);
+    eq(pcts.reduce((a, b) => a + b, 0), 100, `评分说明里的权重合计 100%: ${k}`);
+  }
+  ok(S.strategyWeightText('balanced').includes('20日动量20%'), '均衡策略说明含 20日动量20%');
+  ok(S.strategyWeightText('reversal').includes('距高回撤(反向)25%'), '反转策略的回撤因子标注(反向)');
+  ok(S.strategyWeightText('limitup').includes('早盘/尾盘异动25%'), '涨停板战法说明含早盘/尾盘异动 25%');
+  eq(S.strategyWeightText('不存在的策略'), S.strategyWeightText('balanced'), '未知策略的说明回退到 balanced');
+
+  /* ---- 打分必须用传入的策略权重，并标记 strategyKey ---- */
+  const scoreRows = [];
+  for (let i = 0; i < 8; i++) {
+    scoreRows.push({
+      code: '60010' + i, name: '票' + i, price: 10 + i,
+      mom20: 0.1 * i, mom5: 0.02 * i, dd: -0.05 * i, trend: 50 + i,
+      rsi: 40 + i * 3, atrp: 0.02 + i * 0.004, vr: 1 + i * 0.1,
+      mainScore: 60 + i, activity: 40 + i * 2, attention: 30 + i * 3,
+      ztSeal: 20 + i, ztTiming: 10 + i * 5, ztStreak: i,
+    });
+  }
+  for (const k of keys) {
+    const scored = S.scoreCandidates(scoreRows, k);
+    eq(scored.length, scoreRows.length, `打分不丢样本: ${k}`);
+    eq(scored[0].strategyKey, k, `打分结果标记 strategyKey: ${k}`);
+    eq(Object.keys(scored[0].factors).sort().join(','),
+      Object.keys(S.getStrategy(k).weights).sort().join(','),
+      `因子分位只含该策略的权重因子: ${k}`);
+    for (let i = 1; i < scored.length; i++) {
+      ok(scored[i - 1].score >= scored[i].score, `打分按分数降序: ${k}`);
+    }
+  }
+
+  /* ---- 涨停板战法：早盘 / 尾盘异动打分 ---- */
+  ok(keys.includes('limitup'), '含涨停板战法策略');
+  for (const k of ['ztTiming', 'ztSeal', 'ztHeat']) {
+    ok(typeof S.FACTOR_LABELS[k] === 'string', '涨停板战法因子有中文名: ' + k);
+  }
+
+  eq(S.ztTimingScore({ ztFirst: 93500 }), 100, '9:35 首次封板 → 100 分');
+  eq(S.ztTimingScore({ ztFirst: 101500 }), 85, '10:15 首次封板 → 85 分');
+  eq(S.ztTimingScore({ ztFirst: 110000 }), 60, '11:00 首次封板 → 60 分');
+  eq(S.ztTimingScore({ ztFirst: 133000 }), 40, '13:30 首次封板 → 40 分');
+  eq(S.ztTimingScore({ ztFirst: 142500 }), 30, '14:25 首次封板 → 30 分');
+  eq(S.ztTimingScore({ ztFirst: 142500, ztLast: 145000 }), 90, '14:50 尾盘回封 → 90 分');
+  eq(S.ztTimingScore({ ztFirst: 144000 }), 100, '14:40 尾盘直线封板 → 100 分');
+  eq(S.ztTimingScore({ ztFirst: 93500, ztBreaks: 3 }), 70, '炸板 3 次 → 100-30 = 70 分');
+  eq(S.ztTimingScore({ ztFirst: 93500, ztBreaks: 20 }), 0, '炸板过多 → 不低于 0 分');
+  eq(S.ztTimingScore({}), 0, '无封板时间且未封板 → 0 分');
+  eq(S.ztTimingScore({ sealed: false, chgPct: 8, volRatio: 2 }), 65, '冲板异动：涨 8% 量比 2 → 50+15 = 65 分');
+  eq(S.ztTimingScore({ sealed: false, chgPct: 8, volRatio: 10 }), 80, '冲板异动加分封顶 50+30 = 80 分');
+  eq(S.ztTimingScore({ sealed: false, chgPct: 5, volRatio: 3 }), 0, '涨幅不足 7% 不给异动分');
+
+  /* ---- 涨停板战法：涨停池补全封板强度 / 连板高度 ---- */
+  const mktRows = [];
+  for (let i = 0; i < 10; i++) {
+    mktRows.push({
+      code: '6003' + String(i).padStart(2, '0'),
+      turnover: 1 + i, amount: 1e8 * (1 + i), volRatio: 1 + i * 0.2,
+    });
+  }
+  const ztPool = {
+    pool: [{ c: '600300', fbt: 93500, lbt: 145000, zbc: 1, lbc: 2, fund: 5.0e7, ltsz: 1.0e9 }],
+  };
+  const ztRows = S.computeLimitUp(
+    [{ code: '600300', name: '测试A', turnover: 5, amount: 5e8, volRatio: 2, floatCap: 1e9 }],
+    mktRows, ztPool,
+  );
+  eq(ztRows.length, 1, 'computeLimitUp 数量不变');
+  eq(ztRows[0].sealed, true, '涨停池里有 → 视为已封板');
+  eq(ztRows[0].ztStreak, 2, '连板高度取自涨停池 lbc');
+  eq(ztRows[0].ztFirst, 93500, '首次封板时间取自涨停池 fbt');
+  eq(ztRows[0].ztTiming, 90, '异动分：早盘封板 100 − 炸板 1 次 10 = 90');
+  near(ztRows[0].ztSeal, 100, 1e-9, '封单 5000 万 / 流通 10 亿 → 封板强度封顶 100');
+  inRange(ztRows[0].ztHeat, 0, 100, '热度分在 [0,100]', '实际 ' + ztRows[0].ztHeat);
+  ok(ztRows[0].ztHeat > 0, '热度分大于 0');
+
+  const ztNone = S.computeLimitUp(
+    [{ code: '600999', floatCap: 1e9, chgPct: 3 }], mktRows, null,
+  );
+  eq(ztNone[0].sealed, false, '不在涨停池 → 未封板');
+  eq(ztNone[0].ztSeal, 0, '未封板且无封单数据 → 封板强度 0');
+  eq(ztNone[0].ztStreak, 0, '不在涨停池 → 连板高度 0');
+
   // scoreCandidates：构造 5 只，因子单调
   const rows = [];
   for (let i = 0; i < 5; i++) {
@@ -794,7 +964,8 @@ async function testStrategy() {
   ok(keys.includes('dragon'), '含龙头战法策略');
   const dr = S.getStrategy('dragon');
   near(Object.values(dr.weights).reduce((a, b) => a + b, 0), 1, 1e-6, '龙头战法权重合计 = 1');
-  ok(typeof dr.weights.leader === 'number', '龙头战法含 leader 因子权重');
+  ok(typeof dr.weights.attention === 'number' && typeof dr.weights.activity === 'number',
+    '龙头战法含 attention 与 activity 因子权重');
   ok((dr.reverseKeys || []).includes('atrp'), '龙头战法波动率反向（越低越好）');
   ok(!(dr.reverseKeys || []).includes('rsi'), '龙头战法 RSI 不反向（追强势）');
 
@@ -818,23 +989,42 @@ async function testStrategy() {
   /* ---------- factorLabel 按策略动态标注反向 ---------- */
   ok(S.factorLabel('rsi', 'balanced').includes('反向'), '均衡策略 RSI 标注反向');
   ok(!S.factorLabel('rsi', 'dragon').includes('反向'), '龙头战法 RSI 不标注反向');
-  eq(S.factorLabel('leader', 'dragon'), '板块龙头度', 'leader 因子中文名');
+  eq(S.factorLabel('leader', 'dragon'), '全市场龙头度', 'leader 因子中文名');
+  eq(S.factorLabel('attention', 'dragon'), '市场关注度', 'attention 因子中文名');
+  eq(S.factorLabel('activity', 'dragon'), '市场活跃度', 'activity 因子中文名');
+  near(Object.values(S.getStrategy('dragon').weights).reduce((sum, w) => sum + w, 0), 1, 0.0001,
+    '龙头战法权重合计为 1');
+  eq(S.getStrategy('dragon').weights.attention, 0.20, '市场关注度权重为 20%');
+  eq(S.getStrategy('dragon').weights.activity, 0.20, '市场活跃度权重为 20%');
 
-  /* ---------- computeLeader：同行业相对强度分位 ---------- */
-  const indRows = [];
-  for (let i = 0; i < 6; i++) {
-    indRows.push({ code: 'L' + i, industry: '软件开发', mom20: i * 0.05, vr: 1 + i * 0.1 });
-  }
-  indRows.push({ code: 'S1', industry: '独家行业', mom20: 9, vr: 9 });
-  const led = S.computeLeader(indRows);
+  /* ---------- computeLeader：全市场关注度 / 活跃度 ---------- */
+  const marketRows = Array.from({ length: 10 }, (_, i) => ({
+    code: 'M' + i,
+    industry: i < 5 ? '软件开发' : '半导体',
+    mainRank: i + 1,
+    mainScore: i * 10,
+    mainInflow: i * 1e8,
+    turnover: i,
+    amount: i * 1e8,
+    volRatio: i * 0.2,
+  }));
+  const candidates = [marketRows[1], marketRows[8]].map((row) => ({
+    ...row,
+    mom20: row.mainRank,
+    vr: row.volRatio,
+  }));
+  const led = S.computeLeader(candidates, marketRows);
   const ledMap = new Map(led.map((r) => [r.code, r]));
-  eq(ledMap.get('L5').leader, 100, '同行业最强 → 龙头度 100');
-  eq(ledMap.get('L0').leader, 0, '同行业最弱 → 龙头度 0');
-  eq(ledMap.get('S1').leader, 50, '行业成分不足 5 只 → 中性 50');
-  ok(ledMap.get('L5').leader > ledMap.get('L3').leader, '龙头度随强度单调递增');
-  eq(indRows[0].leader, undefined, 'computeLeader 不修改入参');
-  info('龙头度样例', led.filter((r) => r.code.startsWith('L'))
-    .map((r) => r.code + '=' + r.leader).join(' '));
+  ok(ledMap.get('M8').leader > ledMap.get('M1').leader, '全市场关注度和活跃度较高者龙头度更高');
+  ok(ledMap.get('M8').attention > ledMap.get('M1').attention, '跨行业按全市场关注度排名');
+  ok(ledMap.get('M8').activity > ledMap.get('M1').activity, '跨行业按全市场活跃度排名');
+  eq(ledMap.get('M8').attention, 61.7, '关注度按主线排名、主线强度与资金流计算');
+  eq(ledMap.get('M8').activity, 88.9, '活跃度按换手率、成交额与快照量比计算');
+  eq(marketRows[0].leader, undefined, 'computeLeader 不修改入参');
+  const dragonScored = S.scoreCandidates(led, 'dragon');
+  ok(dragonScored.every((row) => typeof row.factors.attention === 'number'
+    && typeof row.factors.activity === 'number'), '龙头战法得分包含关注度与活跃度因子');
+  info('全市场龙头度样例', led.map((r) => r.code + '=' + r.leader).join(' '));
 
   /* ---------- stage1：只用快照字段（无 K 线也能跑） ---------- */
   const s1in = [
@@ -909,6 +1099,38 @@ async function testPlan() {
   eq(s1.commission, 5, '卖出佣金最低 5 元');
   near(s1.stamp, 5, 1e-9, '印花税 = 10000 × 0.05% = 5');
   near(s1.total, 10.1, 1e-9, '卖出总费用 = 10.1');
+
+  /* ---- 排板单：已封板 → 委托价挂涨停价 ---- */
+  const sealedStock = {
+    code: '600000', name: '封板股', price: 21.45, prevClose: 19.5, chgPct: 10, sealed: true, score: 88,
+  };
+  const q1 = P.buildPlan(sealedStock, { perStockBudget: 20000, strategyKey: 'limitup' });
+  eq(q1.queue, true, '涨停板战法 + 已封板 → 排板单');
+  eq(q1.bid, q1.upLimit, '排板单委托价 = 涨停价');
+  ok(/排板/.test(q1.queueNote), '排板单带成交提示', q1.queueNote);
+
+  const q2 = P.buildPlan(
+    { ...sealedStock, price: 20, chgPct: 2.5, sealed: false },
+    { perStockBudget: 20000, strategyKey: 'balanced' },
+  );
+  eq(q2.queue, false, '普通策略 + 未涨停 → 非排板单');
+  ok(q2.bid < q2.upLimit, '普通单委托价低于涨停价', `bid=${q2.bid} up=${q2.upLimit}`);
+  eq(q2.queueNote, '', '普通单不带排板提示');
+
+  const q3 = P.buildPlan(sealedStock, { perStockBudget: 20000, strategyKey: 'momentum' });
+  eq(q3.queue, true, '已封板股票在任意策略下都按排板单处理');
+
+  // 复制清单与条件单要区分排板单
+  const planQ = P.buildDailyPlan([sealedStock], {
+    capital: 50000, level: { key: 'neutral', position: 0.6 }, strategyKey: 'limitup',
+  });
+  const txtQ = P.buildCopyText(planQ, { date: '2026-11-10', levelName: '中性', score: 50 });
+  ok(txtQ.includes('【排板单】'), '清单标出排板单');
+  ok(txtQ.includes('排板单以涨停价委托'), '清单说明排板挂单时机');
+  ok(!txtQ.includes('普通单'), '全是排板单时不再给普通单提示');
+  const ordersQ = P.buildConditionOrders(planQ);
+  ok(/排板/.test(ordersQ[0].condition), '条件单首条为排板买入', ordersQ[0].condition);
+  ok(/涨停价/.test(ordersQ[0].note), '条件单备注按涨停价挂单', ordersQ[0].note);
 
   // calcBid：委托价必须不低于最新价且不超涨停
   const b1 = P.calcBid(20, 19.5, '600000');

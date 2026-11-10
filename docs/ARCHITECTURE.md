@@ -71,7 +71,7 @@ boot()
          ├─ api.fetchKlines()           四策略配额抽样日 K（并发池）
          ├─ strategy.applyStage1()      策略专属门槛 · 快照初筛
          ├─ indicators.computeFactors() 8 个因子
-         ├─ strategy.computeLeader()    同行业板块龙头度（leader）
+         ├─ strategy.computeLeader()    全市场关注度 / 活跃度 / 龙头度
          ├─ strategy.applyStage2()      策略专属门槛 · K 线因子精筛
          ├─ strategy.relaxStage2()      极端行情保底放宽
          ├─ strategy.scoreCandidates()  分位标准化 + 加权
@@ -126,7 +126,7 @@ boot()
 | `balanced` | 均衡多因子 | `rsi`, `atrp` | 稳健多因子均衡配置 |
 | `momentum` | 趋势动量 | `rsi`, `atrp` | 均线全多头 + 动量突破 |
 | `reversal` | 超跌反弹 | `dd`, `rsi`, `atrp` | 深度回撤 + 超卖反抽 |
-| `dragon` | 龙头战法 | `atrp` | **属于主线 Top10** + **板块龙头度 ≥ 60** + 均线全多头 + 新增 `leader` 因子 (20%) |
+| `dragon` | 龙头战法 | `atrp` | 全市场评估；**关注度 (20%)** + **活跃度 (20%)**，并以全市场龙头度 ≥ 60 为门槛 |
 
 反向因子在 `crossSectionNormalize(rows, keys, reverseKeys)` 里取 `100 - pct`：
 即数值越低分越高（如 RSI 低 = 超卖 = 好）。注意 `dragon` 策略的 `rsi` 不做反向处理（龙头追强势）。
@@ -204,13 +204,13 @@ boot()
 
 三层，全部不需要人工点界面：
 
-1. **离线单元**（`node tools/selftest.mjs`，531 项）：纯函数断言，覆盖 10 道基础过滤、
-   四套策略专属门槛（Stage1/Stage2）与保底放宽、主线打分、四维打分、9 个因子、分位标准化、
-   委托价/股数/止损止盈/费用、条件单文本、K 线解析。
-2. **联网全链路**（`--live`，531~570 项）：真实拉东财数据跑完整链路，打印当日推荐供人工核对。
+1. **离线单元**（`node tools/selftest.mjs`，730 项）：纯函数断言，覆盖 11 道基础过滤、
+   五套策略专属门槛（Stage1/Stage2）与保底放宽、主线打分、四维打分、13 个因子、分位标准化、
+   委托价/股数/止损止盈/费用、条件单文本、K 线解析、过滤条件阈值上下限。
+2. **联网全链路**（`--live`，730~760 项）：真实拉东财数据跑完整链路，打印当日推荐供人工核对。
    **上游限流时会主动跳过依赖它的断言并说明原因**，这是刻意设计，不是掩盖失败。
-3. **真浏览器 E2E**（`tools/e2e-browser.mjs --live`，60 项）：iPhone 14 Pro 视口，5 个 Tab 渲染、
-   manifest/图标/SW/IndexedDB、四策略选项与过滤明细分组、详情弹层、无横向溢出、深色主题、无页面异常。
+3. **真浏览器 E2E**（`tools/e2e-browser.mjs --live`，66 项）：iPhone 14 Pro 视口，5 个 Tab 渲染、
+   manifest/图标/SW/IndexedDB、五策略选项与过滤明细分组、详情弹层、无横向溢出、深色主题、无页面异常。
    也可加 `--url https://hss-lqdl.github.io/stock-advisor/` 直接对线上站点跑。
 
 判定标准统一是**失败 0 项**，而不是"项数等于某个固定值"——项数会随上游可用性浮动。

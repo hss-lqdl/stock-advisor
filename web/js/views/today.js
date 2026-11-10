@@ -8,6 +8,7 @@ import {
 } from '../ui.js';
 import { drawDimBars, drawKline } from '../charts.js';
 import { buildCopyText } from '../plan.js';
+import { TAIL_WINDOW_TEXT } from '../constants.js';
 
 const IDX_NAMES = {
   '000001': '上证指数',
@@ -147,7 +148,7 @@ function renderAdvice(result) {
   card.append(el('div', {
     class: 'disclaimer mt14',
     html: `<b>操作节奏：</b>${esc(lv.advice)}<br>` +
-      `<b>买入时点：</b>尾盘 14:55–15:00 挂单（收盘集合竞价前），价格可挂高 0.5%~1% 确保成交。<br>` +
+      `<b>买入时点：</b>${TAIL_WINDOW_TEXT} 挂单（收盘集合竞价前），价格可挂高 0.5%~1% 确保成交；涨停排板单在封板后尽早按涨停价挂单。<br>` +
       `<b>止损纪律：</b>跌破止损价无条件离场，不加仓不摊平。`,
   }));
 

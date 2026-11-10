@@ -3,7 +3,8 @@
    全部公式均已在真实数据上验证
    ============================================================ */
 
-import { limitPrices, limitPct } from './universe.js';
+import { limitPrices } from './universe.js';
+import { TAIL_WINDOW_TEXT, TAIL_HHMM } from './constants.js';
 
 /** 佣金费率（万分之2.5，最低 5 元） */
 export const COMMISSION_RATE = 0.00025;
@@ -49,17 +50,20 @@ export function calcBid(price, prevClose, code) {
   return { bid, upLimit: up, downLimit: dn, lim };
 }
 
+/** 排板单的止损上限：委托价挂在涨停价、次日容易低开，止损必须比普通单更紧 */
+export const QUEUE_MAX_LOSS = 0.04;
+
 /**
  * 计算止损价：取「5% 止损 / 近 5 日最低下方 2% / ATR×2」三者最宽（最低价），
- * 但最大亏损不超过 8%。
+ * 但最大亏损不超过 maxLossPct（普通单 8%，排板单 4%）。
  */
-export function calcStop(bid, low5, atr) {
+export function calcStop(bid, low5, atr, maxLossPct = 0.08) {
   const candidates = [bid * 0.95];
   if (isFinite(low5) && low5 > 0) candidates.push(low5 * 0.98);
   if (isFinite(atr) && atr > 0) candidates.push(bid - atr * 2);
-  let stop = Math.min(...candidates);       // 最宽
-  stop = Math.max(stop, bid * 0.92);        // 上限 -8%
-  stop = Math.min(stop, bid * 0.985);       // 至少 -1.5%（避免贴脸止损）
+  let stop = Math.min(...candidates);            // 最宽
+  stop = Math.max(stop, bid * (1 - maxLossPct)); // 亏损上限
+  stop = Math.min(stop, bid * 0.985);            // 至少 -1.5%（避免贴脸止损）
   return r2(stop);
 }
 
@@ -87,8 +91,21 @@ export function buildPlan(stock, opt = {}) {
     return null;
   }
 
-  const { bid, upLimit, downLimit, lim } = calcBid(price, prevClose, code);
-  const stop = calcStop(bid, opt.low5, opt.atr);
+  const { up, dn, lim } = limitPrices(prevClose, code);
+  const isQueue = Boolean(
+    stock.sealed ||
+    (price >= up * 0.998) ||
+    (opt.strategyKey === 'limitup' && (stock.sealed || (isFinite(stock.chgPct) && stock.chgPct >= lim * 100 - 0.5)))
+  );
+
+  let bid = isQueue ? up : Math.min(r2(price * 1.008), r2(up * 0.995));
+  if (!isQueue) {
+    bid = Math.max(bid, r2(dn * 1.005));
+    bid = Math.max(bid, r2(price));
+  }
+  const upLimit = up;
+  const downLimit = dn;
+  const stop = calcStop(bid, opt.low5, opt.atr, isQueue ? QUEUE_MAX_LOSS : 0.08);
   const tp1 = r2(bid * 1.06);
   const tp2 = r2(bid * 1.12);
 
@@ -128,6 +145,8 @@ export function buildPlan(stock, opt = {}) {
     rr: Math.round(rr * 100) / 100,
     maxLoss,
     affordable: shares > 0,
+    queue: isQueue,
+    queueNote: isQueue ? '涨停排板，封单靠前才可能成交' : '',
     // 用于 UI 的衍生信息
     score: stock.score,
     mainNames: stock.mainNames || [],
@@ -164,7 +183,7 @@ export function buildDailyPlan(picks, ctx = {}) {
       for (let i = kl.n - 5; i < kl.n; i++) if (kl.low[i] < lo) lo = kl.low[i];
       low5 = lo;
     }
-    const item = buildPlan(p, { perStockBudget, atr, low5, level, capital });
+    const item = buildPlan(p, { perStockBudget, atr, low5, level, capital, strategyKey: ctx.strategyKey });
     if (item) {
       item.perStockBudget = perStockBudget;
       items.push(item);
@@ -205,7 +224,7 @@ export function buildCopyText(plan, meta = {}) {
 
   plan.items.forEach((it, i) => {
     lines.push(`${i + 1}. ${it.name} ${it.code}`);
-    lines.push(`   委托价 ${it.bid.toFixed(2)} 元（现价 ${it.price.toFixed(2)}）`);
+    lines.push(`   委托价 ${it.bid.toFixed(2)} 元（现价 ${it.price.toFixed(2)}）${it.queue ? ' 【排板单】' : ''}`);
     lines.push(`   买入 ${it.shares} 股 ≈ ${it.amount.toFixed(0)} 元`);
     lines.push(`   止损 ${it.stop.toFixed(2)}（${it.stopPct}%）  止盈 ${it.tp1.toFixed(2)}（+6%）/ ${it.tp2.toFixed(2)}（+12%）`);
     if (it.mainNames && it.mainNames.length) {
@@ -215,7 +234,12 @@ export function buildCopyText(plan, meta = {}) {
 
   lines.push('—————————————');
   lines.push(`合计买入 ${plan.totalAmount} 元，手续费约 ${plan.totalFee} 元，剩余 ${plan.cashLeft} 元`);
-  lines.push('提示：尾盘 14:55–15:00 挂单；价格可挂高 0.5%~1% 确保成交。');
+  if (plan.items.some((it) => it.queue)) {
+    lines.push('提示：排板单以涨停价委托，封板后尽早挂单排队（早盘封板宜开盘即挂，尾盘回封宜回封瞬间挂），封单靠前才可能成交；炸板未成交请撤单。');
+  }
+  if (plan.items.some((it) => !it.queue)) {
+    lines.push(`提示：普通单${TAIL_WINDOW_TEXT} 挂单；价格可挂高 0.5%~1% 确保成交。`);
+  }
   return lines.join('\n');
 }
 
@@ -234,9 +258,11 @@ export function buildConditionOrders(plan) {
       code: it.code,
       name: it.name,
       type: '买入',
-      condition: `股价 ≤ ${it.bid.toFixed(2)} 元`,
+      condition: it.queue ? `涨停价 ${it.bid.toFixed(2)} 元排板` : `股价 ≤ ${it.bid.toFixed(2)} 元`,
       action: `买入 ${it.shares} 股`,
-      note: `尾盘 14:55 后设置，委托价 ${it.bid.toFixed(2)}`,
+      note: it.queue
+        ? `封板后尽早以涨停价 ${it.bid.toFixed(2)} 挂单排队，炸板未成交撤单`
+        : `尾盘 ${TAIL_HHMM} 后设置，委托价 ${it.bid.toFixed(2)}`,
     });
     rows.push({
       code: it.code,

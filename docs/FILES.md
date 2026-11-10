@@ -78,7 +78,9 @@ stock_advisor/
 | 模块 | 行数 | 职责 | 主要导出 |
 |---|---|---|---|
 | `api.js` | 646 | 东财接口层：分页并发池、重试、多主机轮转、JSONP 兜底、K 线解析与质量校验 | `fetchSnapshot` `fetchBoards` `fetchKlines` `fetchKline` `fetchIndexes` `fetchQuotes` `fetchLimitPool` `fetchServerClock` `parseKlines` `klineQuality` `secidOf` `pool` `withProgress` `ApiError`；常量 `FS_ALL/FS_CONCEPT/FS_INDUSTRY/F_SNAP_*/F_BOARD/F_KLINE` |
-| `store.js` | 444 | IndexedDB 持久层（7 张表：snapshot / klines / boards / boardDaily / plans / positions / meta） | `openDB` `snapshotSaveAll/LoadAll` `klinesSaveMany/GetMany` `klineAppendToday` `boardsSaveAll/LoadAll` `boardDailySave/Recent` `planSave/Get/Recent` `positionAdd/Update/Remove/LoadAll` `DEFAULT_SETTINGS` `settingsLoad/Save` `storageEstimate` `clearCache` |
+| `store.js` | 444 | IndexedDB 持久层（7 张表：snapshot / klines / boards / boardDaily / plans / positions / meta） | `openDB` `snapshotSaveAll/LoadAll` `klinesSaveMany/GetMany` `klineAppendToday` `boardsSaveAll/LoadAll` `boardDailySave/Recent` `planSave/Get/Recent` `positionAdd/Update/Remove/LoadAll` `settingsLoad/Save` `storageEstimate` `clearCache`；`DEFAULT_SETTINGS` 已移至 `config.js`，此处仅再导出 |
+| `config.js` | 19 | 默认设置常量（独立于存储层与数据层，避免 universe.js → store.js 的反向依赖） | `DEFAULT_SETTINGS` `withDefaults` |
+| `constants.js` | 29 | 时间/文案常量：尾盘窗口、收盘与集合竞价时刻，替代各文件里的 `14:55` 硬编码 | `TAIL_START_H/M` `TAIL_END_H/M` `TAIL_START_MIN` `TAIL_END_MIN` `TAIL_HHMM` `CLOSE_HHMM` `CLOSE_AUCTION_HHMM` `TAIL_WINDOW_TEXT` |
 | `ui.js` | 292 | DOM 与格式化工具（无业务逻辑）。`openSheet` 会给每个弹层加一个 sticky 的「← 返回」按钮 | `$` `$$` `el` `esc` `fmtNum` `fmtPct` `fmtMoney` `fmtInt` `updown` `signCls` `toast` `openSheet` `closeSheet` `copyText` `skeletonCards` `emptyState` `errorBox` `showProgress` `hideProgress` `switchRow` `timeAgo` |
 | `charts.js` | 453 | Canvas 2D 手绘图表（零依赖） | `drawKline` `drawMainlineBars` `drawTrendLine` `drawDimBars` `drawSparkline` `drawEquityCurve` |
 
@@ -86,13 +88,13 @@ stock_advisor/
 
 | 模块 | 行数 | 职责 | 主要导出 |
 |---|---|---|---|
-| `universe.js` | 画像 ~180 | 股票池基础过滤（11 道，规则来自 `filters.js`） | `buildUniverse(rows, cfg)` → `{pool, stats, budgetPerStock, filterConfig}`；`FilterStats` `cloneStats` `normalizeStock` `poolToMap` `limitPrices` `isStarOrGem`；再导出 `filters.js` 的 `isST` `isSuspended` `limitPct` `marketOf` `ruleLabel` `isChiNext`（保持既有 import 路径可用） |
-| `filters.js` | ~591 | **可配置过滤条件**：字段注册表 + 运算符表 + 特殊条件 + 规则求值 + 序列化/合并（零依赖，纯数据 + 纯函数） | `FILTER_FIELDS` `fieldsByGroup` `OPS` `opsForField` `SPECIAL_RULES` `BASE_RULE_DEFAULTS` `MAINLINE_DEFAULTS` `STAGE_RULE_DEFAULTS` `ruleLabel` `evalRule` `runRules` `cloneRule/cloneList/mergeList` `makeRule` `setRule` `upsertRule` `removeRule` `serializeConfig` `resolveFilterConfig` `countRules` `limitPct` `isST` `isSuspended` `marketOf` `isChiNext` `isLimitUp` `isLimitDown`；常量 `FILTER_CONFIG_VERSION` |
+| `universe.js` | 画像 ~180 | 股票池基础过滤（11 道，规则来自 `filters.js`） | `buildUniverse(rows, cfg)` → `{pool, stats, budgetPerStock, filterConfig}`；`FilterStats` `cloneStats` `normalizeStock` `poolToMap` `limitPrices`；再导出 `filters.js` 的 `isST` `isSuspended` `limitPct` `marketOf` `ruleLabel` `isChiNext`（保持既有 import 路径可用） |
+| `filters.js` | ~591 | **可配置过滤条件**：字段注册表 + 运算符表 + 特殊条件 + 规则求值 + 序列化/合并（零依赖，纯数据 + 纯函数） | `FILTER_FIELDS` `fieldsByGroup` `OPS` `opsForField` `SPECIAL_RULES` `BASE_RULE_DEFAULTS` `MAINLINE_DEFAULTS` `STAGE_RULE_DEFAULTS` `ruleLabel` `evalRule` `runRules` `cloneRule/cloneList/mergeList` `makeRule` `setRule` `upsertRule` `removeRule` `serializeConfig` `resolveFilterConfig` `countRules` `fieldRange` `clampFieldValue` `limitPct` `isST` `isSuspended` `marketOf` `isChiNext` `isLimitUp` `isLimitDown`；常量 `FILTER_CONFIG_VERSION` |
 | `mainline.js` | 224 | 近一周主线情绪（板块清洗 + 打分 + 个股归属），主线门槛可参数化 | `analyzeMainline(boards, opt)`（`opt` = `{topN, bottomN, avoidBottom, on}`）`cleanBoards` `boardScore` `stockMainline` `annotatePool` `mainlineTrend`；常量 `NOISE_PATTERN` `MIN_MEMBERS` `TOP_N` `BOTTOM_N` |
 | `market.js` | 235 | 大盘四维打分（趋势 30 / 广度 25 / 情绪 25 / 量能 20）→ 档位 | `analyzeMarket` `trendScore` `breadthScore` `sentimentScore` `volumeScore` `levelByScore` `budgetPerStock`；常量 `LEVELS` |
 | `indicators.js` | 225 | 8 个技术因子 + 标准化 | `computeFactors` `maAt` `maSeries` `rsiAt` `atrAt` `momentum` `drawdownFromHigh` `volumeRatio` `slopePct` `percentileRank` `crossSectionNormalize` |
 | `strategy.js` | 190 | 分位标准化 + 加权打分 + 组合约束 | `scoreCandidates` `applyPortfolioConstraints` `buildReason` `getStrategy`；常量 `STRATEGIES` `REVERSE_KEYS` `FACTOR_LABELS` |
-| `plan.js` | 295 | 买入计划：委托价 / 股数 / 止损止盈 / 费用 / 条件单文本 | `buildDailyPlan` `buildPlan` `calcBid` `calcStop` `calcShares` `buyFee` `sellFee` `buildCopyText` `buildConditionOrders` `buildConditionText` `positionPnl`；常量 `COMMISSION_RATE` `COMMISSION_MIN` `TRANSFER_RATE` `STAMP_RATE` |
+| `plan.js` | 295 | 买入计划：委托价 / 股数 / 止损止盈 / 费用 / 条件单文本 | `buildDailyPlan` `buildPlan` `calcBid` `calcStop` `calcShares` `buyFee` `sellFee` `buildCopyText` `buildConditionOrders` `buildConditionText` `positionPnl`；常量 `COMMISSION_RATE` `COMMISSION_MIN` `TRANSFER_RATE` `STAMP_RATE` `QUEUE_MAX_LOSS` |
 | `backtest.js` | 183 | 滚动回测 | `runBacktest` `runBacktestMatrix` |
 
 ### 4.3 编排层
@@ -112,7 +114,8 @@ stock_advisor/
 | `mainline.js` | 251 | `renderMainline` | 主线情绪 Top20 / 退潮 Top10、板块条形图 |
 | `picks.js` | 351 | `renderPicks` | 推荐列表、每只的因子明细、K 线图、买入清单（A/B/C 三条下单路径） |
 | `positions.js` | 268 | `renderPositions` | 模拟盘持仓、盈亏、止损止盈触发提醒 |
-| `settings.js` | 452 | `renderSettings` `showInstallGuide` | 本金/策略/市值上限/排除创业板/尾盘模式开关、回测入口、缓存管理、安装指引、免责声明 |
+| `settings.js` | 574 | `renderSettings` `showInstallGuide` | 本金/策略/市值上限/排除创业板/尾盘模式开关、回测入口、缓存管理、安装指引、免责声明 |
+| `settings-filter.js` | 331 | `buildFilterEditorCard` `numInput` `GROUP_LABEL` | 过滤条件编辑器（从 settings.js 拆出）：分组卡片、规则行、数值阈值上下限与钳制、「介于」上下限联动 |
 
 **视图收到的 `ctx` 契约**（`views` 只读这些字段，不直接碰 `S`）：
 

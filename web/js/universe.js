@@ -8,7 +8,7 @@
    全部已用真实数据实测
    ============================================================ */
 
-import { DEFAULT_SETTINGS } from './store.js';
+import { withDefaults } from './config.js';
 import {
   resolveFilterConfig, runRules, ruleLabel, isST, isSuspended, marketOf,
   limitPct, isChiNext,
@@ -102,7 +102,7 @@ export function cloneStats(stats) {
  * @returns {{ pool: Array, stats: FilterStats, budgetPerStock: number, filterConfig: object }}
  */
 export function buildUniverse(rawRows, settings = {}) {
-  const cfg = { ...DEFAULT_SETTINGS, ...settings };
+  const cfg = withDefaults(settings);
   const stats = new FilterStats();
   const rows = Array.isArray(rawRows) ? rawRows : [];
   stats.setInput(rows.length);
@@ -136,12 +136,6 @@ export function poolToMap(pool) {
   const m = new Map();
   for (const s of pool) m.set(s.code, s);
   return m;
-}
-
-/** 按代码前缀判断是否可 20% 涨跌 */
-export function isStarOrGem(code) {
-  const c = String(code);
-  return c.startsWith('300') || c.startsWith('301') || c.startsWith('688');
 }
 
 /** 涨停价 / 跌停价（四舍五入到分） */

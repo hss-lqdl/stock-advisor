@@ -196,28 +196,32 @@ export function stockMainline(stock, ml) {
  * 批量给股票池打主线分，并筛出过门槛的候选。
  * @param {Array} pool 标准化股票池
  * @param {MainlineResult} ml
- * @returns {{qualified:Array, stats:{pool:number, matched:number, passed:number}}}
+ * @returns {{all:Array, qualified:Array, stats:{pool:number, matched:number, passed:number}}}
  */
 export function annotatePool(pool, ml) {
+  const all = [];
   const qualified = [];
   let matched = 0;
 
   for (const s of pool) {
     const r = stockMainline(s, ml);
     if (r.matchedCount > 0) matched++;
-    if (!r.qualified) continue;
-    qualified.push({
+    const annotated = {
       ...s,
       mainScore: r.mainScore,
       mainRank: r.mainRank,
       mainBoards: r.boards,
       mainNames: r.boardNames,
       matchedCount: r.matchedCount,
-    });
+    };
+    all.push(annotated);
+    if (r.qualified) qualified.push(annotated);
   }
 
+  all.sort((a, b) => b.mainScore - a.mainScore);
   qualified.sort((a, b) => b.mainScore - a.mainScore);
   return {
+    all,
     qualified,
     stats: { pool: pool.length, matched, passed: qualified.length },
   };

@@ -15,7 +15,8 @@ import {
   copyText, nowHHMMSS, fmtInt, fmtPctRaw, updown,
 } from './ui.js';
 import { drawKline } from './charts.js';
-import { FACTOR_LABELS } from './strategy.js';
+import { FACTOR_LABELS, factorLabel, getStrategy } from './strategy.js';
+import { TAIL_WINDOW_TEXT } from './constants.js';
 import { renderToday } from './views/today.js';
 import { renderMainline } from './views/mainline.js';
 import { renderPicks } from './views/picks.js';
@@ -262,23 +263,34 @@ function render() {
   }
 }
 
-/** 仅重算（不重新拉网络数据）：改本金/策略后调用 */
-async function reanalyze() {
-  if (!S.state) { reload({}); return; }
+/** 仅重算（不重新拉网络数据）：改本金/策略/过滤条件后调用 */
+async function reanalyze(opt = {}) {
+  // 没有原始快照就无法重建股票池，退化为完整刷新，避免「改了条件但没生效」的假象
+  if (!S.state || !S.state.rows || !S.state.rows.length) {
+    return reload({ silent: true });
+  }
   try {
     // 关键：设置可能刚在设置页被改过（过滤条件/策略/本金），必须重新读一次，
     // 否则会拿启动时缓存的旧设置重算，改了过滤条件却看不到变化。
     S.settings = await settingsLoad();
-    if (S.state.rows && S.state.rows.length) {
-      S.state = rebuildPool(S.state, S.settings);
-    }
+    // 过滤条件决定股票池，必须重建；analyze 再基于新池 + 新策略重算计划
+    S.state = rebuildPool(S.state, S.settings);
     S.result = analyze(S.state, { settings: S.settings });
+    S.quotes = buildQuotesFromPool();
     saveSlim();
     render();
     updateBadge();
-    toast('已按新参数重算');
+    if (opt.silent !== true) {
+      const name = S.result.strategyName || '当前策略';
+      const n = S.result.plan.items.length;
+      toast(n
+        ? `已按「${name}」重算：${n} 只`
+        : `已按「${name}」重算：暂无符合条件的标的`);
+    }
+    return S.result;
   } catch (e) {
-    toast('重算失败：' + e.message);
+    toast('重算失败：' + (e && e.message ? e.message : String(e)));
+    return null;
   }
 }
 
@@ -440,15 +452,21 @@ async function openStock(code) {
   if (S.state && S.state.klines) kl = S.state.klines.get(codeStr) || null;
   if (!kl) kl = await klinesGet(codeStr).catch(() => null);
 
-  // 因子（若缓存里没有则现算）
+  // 当前生效的策略：评分口径、因子反向标注、评分标题都跟着它走
+  const stKey = (r && r.strategy) || (S.settings && S.settings.strategy) || 'balanced';
+  const stName = getStrategy(stKey).name;
+
+  // 因子（若缓存里没有则现算；反向因子按当前策略标注，口径与打分一致）
   let factors = stock.factors;
   if ((!factors || !Object.keys(factors).length) && kl) {
     const raw = computeFactors(kl);
     if (raw) {
+      const rev = getStrategy(stKey).reverseKeys || [];
       factors = {};
       for (const k of Object.keys(FACTOR_LABELS)) {
         const v = raw[k];
-        factors[k] = isFinite(v) ? Math.max(0, Math.min(100, k === 'rsi' ? 100 - v : v)) : 50;
+        const clamped = isFinite(v) ? Math.max(0, Math.min(100, v)) : null;
+        factors[k] = clamped === null ? 50 : (rev.includes(k) ? 100 - clamped : clamped);
       }
     }
   }
@@ -496,7 +514,7 @@ async function openStock(code) {
   if (isFinite(stock.rsi)) put('RSI(14)', stock.rsi.toFixed(1));
   if (isFinite(stock.mom20)) put('20日动量', fmtPctRaw(stock.mom20 * 100), updown(stock.mom20));
   if (isFinite(stock.dd)) put('距60日高', fmtPctRaw(stock.dd * 100), updown(stock.dd));
-  if (isFinite(stock.score)) put('综合评分', stock.score.toFixed(1));
+  if (isFinite(stock.score)) put(`综合评分 · ${stName}`, stock.score.toFixed(1));
   if (kv.children.length) node.append(kv);
 
   // 主线标签
@@ -506,21 +524,21 @@ async function openStock(code) {
     node.append(tags);
   }
 
-  // 因子分位
+  // 因子分位（标签按当前生效策略标注「反向」，与打分口径一致）
   if (factors && Object.keys(factors).length) {
     const list = el('div', { class: 'factor-list' });
     for (const k of Object.keys(FACTOR_LABELS)) {
       const v = factors[k];
       if (!isFinite(v)) continue;
       list.append(el('div', { class: 'factor-row' }, [
-        el('div', { class: 'k', text: FACTOR_LABELS[k] }),
+        el('div', { class: 'k', text: factorLabel(k, stKey) }),
         el('div', { class: 'bar' }, [
           el('div', { class: 'fill', style: { width: Math.max(2, Math.min(100, v)) + '%' } }),
         ]),
         el('div', { class: 'v', text: v.toFixed(0) }),
       ]));
     }
-    node.append(el('div', { class: 'sec-title mt14', text: '因子分位（同池横向对比）' }));
+    node.append(el('div', { class: 'sec-title mt14', text: `因子分位（同池横向对比 · ${stName}）` }));
     node.append(list);
   }
 
@@ -557,7 +575,7 @@ async function openStock(code) {
             `买入 ${planItem.shares} 股 ≈ ${fmtInt(planItem.amount)} 元`,
             `止损 ${planItem.stop.toFixed(2)}（${planItem.stopPct}%）`,
             `止盈 ${planItem.tp1.toFixed(2)}（+6%）/ ${planItem.tp2.toFixed(2)}（+12%）`,
-            `窗口：尾盘 14:55–15:00 挂单`,
+            `窗口：${TAIL_WINDOW_TEXT} 挂单（涨停排板单宜封板后尽早挂）`,
           ];
           const ok = await copyText(lines.join('\n'));
           toast(ok ? '已复制' : '复制失败');

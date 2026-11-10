@@ -1,12 +1,12 @@
 /* ============================================================
-   strategy.js — 四策略定义 + 策略专属股票池过滤 + 打分 + 组合约束
+   strategy.js — 五策略定义 + 策略专属股票池过滤 + 打分 + 组合约束
    ------------------------------------------------------------
    设计要点：
    1. 每个策略有自己的「股票池过滤链」（STRATEGY_FILTERS），
       分 stage1（只用快照字段）/ stage2（需要 K 线因子）两段，
-      从 universe.js 的基础池末端续接，因此四个策略的候选池互不相同。
+      从 universe.js 的基础池末端续接，因此五个策略的候选池互不相同。
    2. 过滤链带保底：若筛完不足 minKeep 只，逐级放宽，绝不给空结果。
-   3. dragon（龙头战法）额外用 leader 因子 —— 同行业相对强度分位。
+   3. dragon（龙头战法）额外用全市场关注度、活跃度因子。
    ============================================================ */
 
 import { crossSectionNormalize } from './indicators.js';
@@ -68,19 +68,37 @@ export const STRATEGIES = {
   dragon: {
     key: 'dragon',
     name: '龙头战法',
-    desc: '只在最强主线里买板块龙头：趋势与相对强度优先，要求趋势完好、放量、同板块领先',
-    // 波动率越低越好；动量/趋势/龙头度均为越大越好
+    desc: '全市场识别龙头：综合市场关注度与活跃度，兼顾趋势、成交量和换手率',
+    // 波动率越低越好；其余因子均为越大越好
     reverseKeys: ['atrp'],
     weights: {
-      mom20: 0.15,
-      mom5: 0.10,
-      dd: 0.10,
-      trend: 0.20,
+      mom20: 0.10,
+      mom5: 0.05,
+      dd: 0.05,
+      trend: 0.15,
       rsi: 0.05,
       atrp: 0.05,
       vr: 0.10,
       main: 0.05,
-      leader: 0.20,
+      attention: 0.20,
+      activity: 0.20,
+    },
+  },
+  limitup: {
+    key: 'limitup',
+    name: '涨停板战法',
+    desc: '只看高参与、高活跃的强势股：换手与成交额放大，已封板可排板买入，重点看早盘快速封板与尾盘异动',
+    reverseKeys: ['atrp'],
+    weights: {
+      mom5: 0.05,
+      trend: 0.05,
+      vr: 0.05,
+      main: 0.05,
+      activity: 0.25,
+      ztSeal: 0.15,
+      ztTiming: 0.25,
+      ztStreak: 0.10,
+      atrp: 0.05,
     },
   },
 };
@@ -104,7 +122,13 @@ export const FACTOR_LABELS = {
   atrp: '波动率',
   vr: '量比',
   main: '主线强度',
-  leader: '板块龙头度',
+  attention: '市场关注度',
+  activity: '市场活跃度',
+  leader: '全市场龙头度',
+  ztSeal: '封板强度',
+  ztTiming: '早盘/尾盘异动',
+  ztStreak: '连板高度',
+  ztHeat: '涨停热度',
 };
 
 /** 带策略语境的因子名：该策略下反向的因子补上「(反向)」 */
@@ -112,6 +136,21 @@ export function factorLabel(key, strategyKey) {
   const base = FACTOR_LABELS[key] || key;
   const st = getStrategy(strategyKey);
   return (st.reverseKeys || []).includes(key) ? base + '(反向)' : base;
+}
+
+/**
+ * 按因子权重自动生成「本次评分策略」说明（唯一真值源：STRATEGIES[key].weights）。
+ * 策略权重一旦调整，说明文字自动跟着变，不会出现文字与实际打分不一致。
+ * @param {string} strategyKey
+ * @returns {string} 例如「均衡多因子：20日动量20% + 趋势强度20% + …。适合震荡与结构市」
+ */
+export function strategyWeightText(strategyKey) {
+  const st = getStrategy(strategyKey);
+  const w = st.weights || {};
+  const parts = Object.keys(w)
+    .sort((a, b) => (w[b] || 0) - (w[a] || 0))
+    .map((k) => `${factorLabel(k, st.key)}${Math.round((w[k] || 0) * 100)}%`);
+  return `${st.name}：${parts.join(' + ')}。${st.desc || ''}`;
 }
 
 /* ============================================================
@@ -161,6 +200,7 @@ export const STRATEGY_FILTERS = {
   momentum: compileDefaults('momentum'),
   reversal: compileDefaults('reversal'),
   dragon: compileDefaults('dragon'),
+  limitup: compileDefaults('limitup'),
 };
 
 /**
@@ -196,39 +236,115 @@ export function strategyRules(key, cfg) {
 export const STRATEGY_MIN_KEEP = 5;
 
 /**
- * 计算「同行业龙头度」：在同行业内按 20 日动量与量比做横截面分位，取均值 0~100。
- * 龙头战法用它区分「板块里最强的那只」与「板块里的跟风股」。
- * 调用前提：rows 必须已经合并过 K 线因子（mom20 / vr），否则一律中性 50。
- * 行业成分少于 5 只时不计算（分位无意义），统一给中性 50。
- * @param {Array} rows 股票数组（需含 code / industry / mom20 / vr）
- * @returns {Array} 新数组（每只带 leader），不修改入参
+ * 按完整市场快照计算关注度、活跃度和综合龙头度；rows 只包含需要返回分数的候选。
+ * 关注度由主线排名、主线强度和主力净流入构成；活跃度由换手率、成交额和量比构成。
+ * @param {Array} rows 需评分的候选
+ * @param {Array} [marketRows=rows] 全市场快照（需含主线标注与快照字段）
+ * @returns {Array} 新数组（每只带 attention / activity / leader），不修改入参
  */
-export function computeLeader(rows) {
-  const groups = new Map();
-  for (const r of rows) {
-    const ind = String(r.industry || '').trim();
-    if (!ind) continue;
-    let g = groups.get(ind);
-    if (!g) { g = []; groups.set(ind, g); }
-    g.push(r);
-  }
+export function computeLeader(rows, marketRows = rows) {
+  const distributions = {
+    mainRank: marketRows.map((r) => r.mainRank)
+      .filter((v) => isNum(v) && v > 0 && v < 9999).sort((a, b) => a - b),
+    mainScore: marketRows.map((r) => r.mainScore)
+      .filter((v) => isNum(v) && v > -999).sort((a, b) => a - b),
+    mainInflow: marketRows.map((r) => r.mainInflow).filter(isNum).sort((a, b) => a - b),
+    turnover: marketRows.map((r) => r.turnover).filter(isNum).sort((a, b) => a - b),
+    amount: marketRows.map((r) => r.amount).filter(isNum).sort((a, b) => a - b),
+    volRatio: marketRows.map((r) => r.volRatio).filter(isNum).sort((a, b) => a - b),
+  };
+  const rank = (row, key, invert = false) => {
+    const value = row[key];
+    if (!isNum(value)
+      || (key === 'mainRank' && (value <= 0 || value >= 9999))
+      || (key === 'mainScore' && value <= -999)) return 50;
+    const score = pctRank(distributions[key], value);
+    return invert ? 100 - score : score;
+  };
 
-  const leaderOf = new Map();
-  for (const [, members] of groups) {
-    if (members.length < 5) continue;
-    const mom = members.map((m) => m.mom20).filter(isNum).sort((a, b) => a - b);
-    const vr = members.map((m) => m.vr).filter(isNum).sort((a, b) => a - b);
-    for (const m of members) {
-      const a = pctRank(mom, m.mom20);
-      const b = pctRank(vr, m.vr);
-      leaderOf.set(m.code, Math.round(((a + b) / 2) * 10) / 10);
-    }
-  }
+  return rows.map((r) => {
+    const attention = rank(r, 'mainRank', true) * 0.35
+      + rank(r, 'mainScore') * 0.35
+      + rank(r, 'mainInflow') * 0.30;
+    const activity = rank(r, 'turnover') * 0.35
+      + rank(r, 'amount') * 0.35
+      + rank(r, 'volRatio') * 0.30;
+    return {
+      ...r,
+      attention: Math.round(attention * 10) / 10,
+      activity: Math.round(activity * 10) / 10,
+      leader: Math.round((attention * 0.55 + activity * 0.45) * 10) / 10,
+    };
+  });
+}
 
-  return rows.map((r) => ({
-    ...r,
-    leader: leaderOf.has(r.code) ? leaderOf.get(r.code) : 50,
-  }));
+/** 东财涨停池时间字段（如 93000 / 145512）→ HHMM 数值 */
+function hhmmOf(t) {
+  const n = Number(t);
+  if (!isNum(n) || n <= 0) return NaN;
+  return Math.floor(n / 100);
+}
+
+/**
+ * 早盘 / 尾盘异动打分（0~100）。
+ *   早盘：首次封板越早越强（9:30~10:00 满分，10:30 前较强，之后递减）
+ *   尾盘：最后封板或尾盘拉升在 14:30 以后视为尾盘异动
+ *   未封板：当日涨幅 ≥ 7% 且量比放大，按「临近涨停的异动」给中等分
+ */
+export function ztTimingScore(s) {
+  const first = hhmmOf(s.ztFirst);
+  const last = hhmmOf(s.ztLast);
+  let early = 0;
+  if (isNum(first)) {
+    if (first <= 1000) early = 100;
+    else if (first <= 1030) early = 85;
+    else if (first <= 1130) early = 60;
+    else if (first <= 1400) early = 40;
+    else early = 30;
+  }
+  let tail = 0;
+  if (isNum(last) && last >= 1430) tail = 90;
+  if (isNum(first) && first >= 1430) tail = 100; // 尾盘直线封板
+  let near = 0;
+  if (!s.sealed && isNum(s.chgPct) && s.chgPct >= 7) {
+    near = 50 + Math.min(30, (isNum(s.volRatio) ? s.volRatio - 1 : 0) * 15);
+  }
+  // 封板后多次炸板说明分歧大，扣分
+  const breaks = isNum(Number(s.ztBreaks)) ? Number(s.ztBreaks) : 0;
+  return Math.max(0, Math.max(early, tail, near) - breaks * 10);
+}
+
+/**
+ * 涨停板战法因子：活跃度（换手/成交额/量比全市场分位）、封板强度、早尾盘异动、连板高度。
+ * @param {Array} rows 待评分候选
+ * @param {Array} marketRows 全市场快照（做分位基准）
+ * @param {object} ztPool fetchLimitPool('up') 的结果
+ * @returns {Array} 新数组
+ */
+export function computeLimitUp(rows, marketRows = rows, ztPool = null) {
+  const zt = new Map();
+  for (const p of (ztPool && ztPool.pool) || []) if (p && p.c) zt.set(String(p.c), p);
+  const withAct = computeLeader(rows, marketRows);
+  return withAct.map((r) => {
+    const p = zt.get(r.code);
+    const s = {
+      ...r,
+      sealed: !!p || !!r.sealed,
+      ztFirst: p ? p.fbt : r.ztFirst,
+      ztLast: p ? p.lbt : r.ztLast,
+      ztBreaks: p ? Number(p.zbc) || 0 : 0,
+      ztStreak: p ? Number(p.lbc) || 1 : 0,
+    };
+    // 封单额 / 流通市值（‰），无封单数据时按是否封板给中性分
+    const fund = p ? Number(p.fund) : NaN;
+    const cap = isNum(r.floatCap) ? r.floatCap : (p ? Number(p.ltsz) : NaN);
+    s.ztSeal = isNum(fund) && isNum(cap) && cap > 0
+      ? Math.min(100, (fund / cap) * 1000 * 20)
+      : (s.sealed ? 50 : 0);
+    s.ztTiming = ztTimingScore(s);
+    s.ztHeat = Math.round((s.activity * 0.5 + s.ztTiming * 0.3 + s.ztSeal * 0.2) * 10) / 10;
+    return s;
+  });
 }
 
 /** 升序数组里的百分位（0~100）；缺失返回 50 */
@@ -242,7 +358,10 @@ function pctRank(sorted, v) {
     if (sorted[mid] < v) lo = mid + 1;
     else hi = mid;
   }
-  return n > 1 ? (lo / (n - 1)) * 100 : 50;
+  let end = lo;
+  while (end < n && sorted[end] === v) end++;
+  const rank = end > lo ? (lo + end - 1) / 2 : lo;
+  return n > 1 ? (rank / (n - 1)) * 100 : 50;
 }
 
 /** 依次跑一条过滤链，并把每一步记进 stats */
@@ -298,11 +417,16 @@ export function scoreCandidates(rows, strategyKey = 'balanced') {
   const W = strategy.weights;
   const keys = Object.keys(W);
 
-  // 构造 main 字段别名（mainScore → main）；leader 缺失时补中性 50
+  // 构造 main 字段别名（mainScore → main）；快照因子缺失时补中性 50
   const prepared = rows.map((r) => ({
     ...r,
     main: isFinite(r.mainScore) ? r.mainScore : 0,
     leader: isFinite(r.leader) ? r.leader : 50,
+    attention: isFinite(r.attention) ? r.attention : 50,
+    activity: isFinite(r.activity) ? r.activity : 50,
+    ztSeal: isFinite(r.ztSeal) ? r.ztSeal : 0,
+    ztTiming: isFinite(r.ztTiming) ? r.ztTiming : 0,
+    ztStreak: isFinite(r.ztStreak) ? r.ztStreak : 0,
   }));
 
   const norm = crossSectionNormalize(prepared, keys, strategy.reverseKeys || REVERSE_KEYS);
@@ -388,7 +512,20 @@ export function buildReason(stock) {
     parts.push(`主线：<b>${stock.mainNames.slice(0, 2).join('、')}</b>${rk}`);
   }
   if (isFinite(stock.leader) && stock.leader >= 75) {
-    parts.push(`同行业龙头度 <b>${stock.leader.toFixed(0)}</b>`);
+    parts.push(`全市场龙头度 <b>${stock.leader.toFixed(0)}</b>`);
+  }
+  if (isFinite(stock.attention) && stock.attention >= 75) {
+    parts.push(`市场关注度 <b>${stock.attention.toFixed(0)}</b>`);
+  }
+  if (isFinite(stock.activity) && stock.activity >= 75) {
+    parts.push(`市场活跃度 <b>${stock.activity.toFixed(0)}</b>`);
+  }
+  if (stock.sealed) {
+    const st = stock.ztStreak > 1 ? `${stock.ztStreak} 连板` : '首板';
+    parts.push(`已封板（<b>${st}</b>），可排板买入`);
+  }
+  if (isFinite(stock.ztTiming) && stock.ztTiming >= 80) {
+    parts.push(`<b>${hhmmOf(stock.ztFirst) >= 1430 || hhmmOf(stock.ztLast) >= 1430 ? '尾盘' : '早盘'}异动</b>`);
   }
   if (isFinite(stock.mom20) && stock.mom20 > 0.05) {
     parts.push(`20日动量 <b>+${(stock.mom20 * 100).toFixed(1)}%</b>`);
