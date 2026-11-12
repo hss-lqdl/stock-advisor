@@ -409,6 +409,37 @@ async function main() {
           ok('提供「恢复默认」按钮', edCheck.hasReset);
           ok('必需的停牌条件被锁定（不可关闭）', edCheck.lockedSwitches >= 1, `锁定开关 ${edCheck.lockedSwitches}`);
 
+          for (const width of [393, 320]) {
+            await page.setViewport({
+              width, height: 852, deviceScaleFactor: width === 393 ? 2 : 1,
+              isMobile: true, hasTouch: true,
+            });
+            const filterLayout = await page.evaluate(() => {
+              const card = document.querySelector('#settingsContent .settings-filter-editor');
+              const rows = [...card.querySelectorAll('.rule-row')];
+              const marketCapRow = rows.find((row) => (row.querySelector('.rule-main .lbl')?.innerText || '').includes('总市值'));
+              const rowOverflow = rows.some((row) => {
+                const bounds = row.getBoundingClientRect();
+                const ctrl = row.querySelector('.rule-ctrl');
+                return ctrl && ctrl.getBoundingClientRect().right > bounds.right + 1;
+              });
+              const label = marketCapRow && marketCapRow.querySelector('.rule-main').getBoundingClientRect();
+              const ctrl = marketCapRow && marketCapRow.querySelector('.rule-ctrl').getBoundingClientRect();
+              return {
+                gridRows: rows.every((row) => getComputedStyle(row).display === 'grid'),
+                labelWidth: label ? label.width : 0,
+                controlsBelowLabel: !!(label && ctrl && ctrl.top >= label.bottom - 1),
+                rowOverflow,
+                pageOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+              };
+            });
+            ok(`手机端 ${width}px 过滤行标签与控件分行且不溢出`,
+              filterLayout.gridRows && filterLayout.labelWidth >= 200
+                && filterLayout.controlsBelowLabel && !filterLayout.rowOverflow && !filterLayout.pageOverflow,
+              JSON.stringify(filterLayout));
+          }
+          await page.setViewport({ width: 393, height: 852, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+
           /* 交互：关掉第一条基础条件 → 已启用数量减少，且不崩溃 */
           const toggle = await page.evaluate(() => {
             const card = [...document.querySelectorAll('#tab-settings .card')]
@@ -496,12 +527,14 @@ async function main() {
               const ctrl = row.querySelector('.rule-ctrl');
               const rowRect = row.getBoundingClientRect();
               const ctrlRect = ctrl.getBoundingClientRect();
-              const controls = [...ctrl.children].map((node) => {
+              const controls = [...ctrl.children]
+                .filter((node) => getComputedStyle(node).display !== 'none')
+                .map((node) => {
                 const rect = node.getBoundingClientRect();
                 return rect.left >= ctrlRect.left - 1
                   && rect.right <= ctrlRect.right + 1
                   && rect.right <= document.documentElement.clientWidth + 1;
-              });
+                });
               return {
                 hasField: !!ctrl.querySelector('[aria-label="条件字段"]'),
                 hasOperator: !!ctrl.querySelector('[aria-label="运算符"]'),

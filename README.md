@@ -31,7 +31,7 @@ iPhone 用 **Safari** 打开上面的地址 → 分享 → 添加到主屏幕，
 node server.mjs                 # 起服务（等同双击 启动.bat）
 npm test                        # 离线算法自测（730 项，1 秒内）
 npm run test:live               # 联网全链路自测（531~570 项，需真实行情）
-npm run test:e2e                # 真浏览器 E2E（66 项，需先起服务）
+npm run test:e2e                # 真浏览器 E2E（68 项，需先起服务）
 npm run publish                 # 发布到 GitHub Pages（需 GH_TOKEN，见 docs/DEPLOY.md）
 python tools/make_icons.py      # 重新生成图标
 ```
@@ -459,8 +459,8 @@ cd ..\..
 node tools\e2e-browser.mjs --live
 ```
 
-实测结果：**66 项断言全部通过**（联网拉不到推荐时，详情弹层那一项会以「跳过」计），0 个致命 console.error、0 个页面异常。
-覆盖：iPhone 14 Pro 视口（393×852）、5 个 Tab 渲染、无横向溢出、深色主题、manifest、apple-touch-icon、设置页四策略选项与过滤明细分组标题、**过滤条件编辑器（4 个分组 / 20 行条件 / 独立开关 / 阈值可编辑 / 添加自定义 / 恢复默认 / 关闭一条后计数下降且不白屏）**、设置页桌面布局（1024/1440/1920px）、Service Worker 注册（`stock-advisor-v1.5.11`）、IndexedDB 七张表、详情弹层、刷新按钮。
+实测结果：**68 项断言全部通过**（联网拉不到推荐时，详情弹层那一项会以「跳过」计），0 个致命 console.error、0 个页面异常。
+覆盖：iPhone 14 Pro 视口（393×852）、5 个 Tab 渲染、无横向溢出、深色主题、manifest、apple-touch-icon、设置页策略选项与过滤明细分组标题、**过滤条件编辑器（分组 / 条件行 / 独立开关 / 阈值编辑 / 自定义条件 / 恢复默认 / 手机端 393px 与 320px 排版 / 桌面布局）**、Service Worker 注册、IndexedDB 七张表、详情弹层、刷新按钮。
 
 > 也可以直接对线上站点跑，省去本地起服务：
 > `node tools\e2e-browser.mjs --live --url https://hss-lqdl.github.io/stock-advisor/`
@@ -562,8 +562,8 @@ A：约 2–4 MB，远低于浏览器配额。「设置 → 数据管理 → 清
 | PWA | manifest + Service Worker（HTTPS/localhost 下生效） |
 | 实测浏览器 | Edge 无头（iPhone 14 Pro UA，393×852 @2x）、iOS Safari |
 | 实测版本 | Node v24.21.0 / Python 3.12.14 |
-| 自测 | 离线算法 730 项 + 联网算法 531~570 项 + 浏览器 66 项断言，全部通过 |
-| SW 版本 | `web/sw.js` 的 `VERSION` 常量（当前 `v1.5.16`）；改任何预缓存文件后必须 bump |
+| 自测 | 离线算法 730 项 + 联网算法 531~570 项 + 浏览器 68 项断言，全部通过 |
+| SW 版本 | `web/sw.js` 的 `VERSION` 常量（当前 `v1.5.17`）；改任何预缓存文件后必须 bump |
 
 > 联网与浏览器两套断言的**项数会浮动**，不是固定值：上游东财限流时，K 线/指数接口
 > 拉不到，套件会主动跳过依赖它们的断言并打印「跳过」说明，此时项数变少但仍应全绿。
@@ -572,6 +572,10 @@ A：约 2–4 MB，远低于浏览器配额。「设置 → 数据管理 → 清
 ---
 
 ## 十四、变更记录
+
+### v1.5.17 · 2026-11-12
+- 优化手机端过滤条件编辑器布局，标签与控件分行显示。
+- 增加 393px 与 320px 视口下的浏览器布局检查。
 
 ### v1.5.12 · 2026-11-07
 - 龙头战法改为全市场横截面识别，并将关注度、活跃度分别纳入 20% 评分权重。
