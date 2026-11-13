@@ -153,20 +153,20 @@ async function testUniverse() {
   ok(!codes.includes('600005'), '剔除：市值 900 亿 > 800 亿');
   ok(!codes.includes('600006'), '剔除：当日涨停');
   ok(!codes.includes('600007'), '剔除：当日跌停');
-  ok(!codes.includes('600008'), '剔除：成交额 5000 万 < 1 亿');
+  ok(codes.includes('600008'), '基础过滤保留成交额 5000 万股票');
   ok(!codes.includes('600009'), '剔除：换手率 0.1% < 0.5%');
   ok(!codes.includes('600010'), '剔除：价格 1.5 元 ≤ 2 元');
   ok(!codes.includes('300011'), '剔除：创业板（默认排除）');
   ok(!codes.includes('600012'), '剔除：停牌');
   ok(!codes.includes('600013'), '剔除：一字板');
 
-  ok(pool.length === 2, '合成数据最终池应为 2 只（600001 + 600014）', '实际 ' + pool.length);
+  ok(pool.length === 3, '合成数据最终池保留低成交额股票', '实际 ' + pool.length);
 
   // 关闭排除开关后，创业板 300011 应被保留
   const r2 = U.buildUniverse(rows, { capital: 50000, maxPicks: 5, excludeChiNext: false });
   const codes2 = r2.pool.map((s) => s.code);
   ok(codes2.includes('300011'), '保留：创业板（关闭排除开关时）');
-  ok(r2.pool.length === 3, '关闭排除开关最终池应为 3 只', '实际 ' + r2.pool.length);
+  ok(r2.pool.length === 4, '关闭排除开关最终池应为 4 只', '实际 ' + r2.pool.length);
 
   // 过滤统计
   ok(Array.isArray(stats.steps) && stats.steps.length >= 9, '过滤统计步骤 ≥ 9 道');
@@ -271,11 +271,11 @@ async function testFilters() {
 
   /* ---------- setRule / removeRule / 合并语义 ---------- */
   const base = F.resolveFilterConfig(null, {}).base;
-  const turnedOff = F.setRule(base, 'amountMin', { on: false });
+  const turnedOff = F.setRule(base, 'turnoverMin', { on: false });
   ok(turnedOff !== base, 'setRule 返回新数组（不原地修改）');
-  ok(base.find((r) => r.id === 'amountMin').on !== false, 'setRule 不影响原数组');
-  ok(turnedOff.find((r) => r.id === 'amountMin').on === false, 'setRule 正确写入 on:false');
-  eq(F.removeRule(turnedOff, 'amountMin').length, base.length - 1,
+  ok(base.find((r) => r.id === 'turnoverMin').on !== false, 'setRule 不影响原数组');
+  ok(turnedOff.find((r) => r.id === 'turnoverMin').on === false, 'setRule 正确写入 on:false');
+  eq(F.removeRule(turnedOff, 'turnoverMin').length, base.length - 1,
     'removeRule 能移除条目（但默认条目会被 mergeList 恢复，见下）');
 
   const custom = F.makeRule({ field: 'pe', op: '<=', value: 50 });
@@ -283,7 +283,7 @@ async function testFilters() {
   const withCustom = turnedOff.concat([custom]);
   const merged = F.mergeList(base, withCustom);
   ok(merged.some((r) => r.id === custom.id), 'mergeList 保留自定义条件');
-  ok(merged.find((r) => r.id === 'amountMin').on === false, 'mergeList 保留用户的关闭状态');
+  ok(merged.find((r) => r.id === 'turnoverMin').on === false, 'mergeList 保留用户的关闭状态');
   eq(merged.length, base.length + 1, 'mergeList 结果 = 默认条目 + 1 条自定义');
   ok(F.removeRule(merged, custom.id).every((r) => r.id !== custom.id), 'removeRule 删掉自定义条件');
 
@@ -291,7 +291,29 @@ async function testFilters() {
   const def = F.resolveFilterConfig(null, {});
   eq(def.mainline.topN, 20, '默认主线 TopN = 20');
   ok(def.base.every((r) => r.on !== false), '默认基础条件全部开启');
+  ok(!def.base.some((r) => r.id === 'amountMin'), '基础过滤不再重复限制成交额');
+  ok(!def.strategies.momentum.stage1.some((r) => r.id === 'm1_mktCap'),
+    '趋势策略不再重复限制基础市值上限');
+  ok(!def.strategies.dragon.stage1.some((r) => ['d1_mainRank', 'd1_mktCap'].includes(r.id)),
+    '龙头策略不再重复限制主线排名和基础市值上限');
   ok(def.strategies.balanced.stage1.length >= 3, '默认策略条件已编译');
+
+  const oldConfig = {
+    base: [{ id: 'amountMin', kind: 'field', field: 'amount', op: '>=', value: 1 }],
+    strategies: {
+      momentum: { stage1: [{ id: 'm1_mktCap', kind: 'field', field: 'mktCap', op: '<=', value: 800 }] },
+      dragon: { stage1: [
+        { id: 'd1_mainRank', kind: 'field', field: 'mainRank', op: '<=', value: 10 },
+        { id: 'd1_mktCap', kind: 'field', field: 'mktCap', op: '<=', value: 800 },
+      ] },
+    },
+  };
+  const migrated = F.resolveFilterConfig(oldConfig, {});
+  ok(!migrated.base.some((r) => r.id === 'amountMin'), '旧配置迁移时移除基础成交额重复项');
+  ok(!migrated.strategies.momentum.stage1.some((r) => r.id === 'm1_mktCap'),
+    '旧配置迁移时移除趋势市值重复项');
+  ok(!migrated.strategies.dragon.stage1.some((r) => ['d1_mainRank', 'd1_mktCap'].includes(r.id)),
+    '旧配置迁移时移除龙头重复项');
 
   const legacyOff = F.resolveFilterConfig(null, { excludeChiNext: false });
   ok(legacyOff.base.find((r) => r.id === 'chiNext').on === false,
@@ -325,15 +347,14 @@ async function testFilters() {
   ];
 
   const r0 = U.buildUniverse(pool, { capital: 50000, maxPicks: 5 });
-  eq(r0.pool.length, 1, '默认配置：只剩 1 只（低成交额 + 创业板均被剔除）');
+  eq(r0.pool.length, 2, '默认配置：低成交额股票保留、创业板股票剔除');
   ok(r0.filterConfig, 'buildUniverse 返回 filterConfig');
 
-  // 关掉「成交额 ≥ 1 亿」这一条 → 低成交额股票回到池里
+  // 基础规则不再限制成交额；低成交额股票仅由策略专属门槛筛选
   const cfgA = F.resolveFilterConfig(null, {});
-  cfgA.base = F.setRule(cfgA.base, 'amountMin', { on: false });
   const rA = U.buildUniverse(pool, { capital: 50000, maxPicks: 5, filterConfig: cfgA });
-  ok(rA.pool.some((s) => s.code === '600008'), '关闭「成交额」条件后，低成交额股票被保留');
-  eq(rA.pool.length, 2, '关闭成交额条件后池为 2 只');
+  ok(rA.pool.some((s) => s.code === '600008'), '基础池保留低成交额股票');
+  eq(rA.pool.length, 2, '基础池不按成交额过滤');
 
   // 关掉「排除创业板」→ 创业板股票回到池里
   const cfgB = F.resolveFilterConfig(null, {});
@@ -341,11 +362,11 @@ async function testFilters() {
   const rB = U.buildUniverse(pool, { capital: 50000, maxPicks: 5, filterConfig: cfgB });
   ok(rB.pool.some((s) => s.code === '300011'), '关闭「排除创业板」条件后创业板被保留');
 
-  // 改阈值：成交额门槛从 1 亿提到 10 亿 → 正常股票也被剔除
+  // 改阈值：基础换手率门槛提到 10% → 股票被剔除
   const cfgC = F.resolveFilterConfig(null, {});
-  cfgC.base = F.setRule(cfgC.base, 'amountMin', { value: 10 });
+  cfgC.base = F.setRule(cfgC.base, 'turnoverMin', { value: 10 });
   const rC = U.buildUniverse(pool, { capital: 50000, maxPicks: 5, filterConfig: cfgC });
-  eq(rC.pool.length, 0, '把成交额门槛改到 10 亿后，全部被剔除');
+  eq(rC.pool.length, 0, '把换手率门槛改到 10% 后，全部被剔除');
 
   // 关掉市值区间下限
   const cfgD = F.resolveFilterConfig(null, {});
@@ -431,21 +452,21 @@ async function testFilters() {
   const st1 = E.rebuildPool(fakeState, baseSettings);
   ok(st1.pool.length >= 2, '默认条件下股票池非空', `pool=${st1.pool.length}`);
 
-  // 收紧基础过滤（成交额 ≥ 9999 亿）→ 重建后池子必须立刻变空
+  // 收紧基础过滤（换手率 ≥ 9999%）→ 重建后池子必须立刻变空
   const tightCfg = {
     v: 1,
-    base: [{ id: 'amountMin', on: true, kind: 'field', field: 'amount', op: '>=', value: 9999, value2: null }],
+    base: [{ id: 'turnoverMin', on: true, kind: 'field', field: 'turnover', op: '>=', value: 9999, value2: null }],
     mainline: {},
     strategies: {},
   };
   const tight = { ...baseSettings, filterConfig: tightCfg };
   const st2 = E.rebuildPool(fakeState, tight);
   eq(st2.pool.length, 0, '改完过滤条件 → 重建池子立刻生效（成交额门槛卡死为空）');
-  eq(st2.filterConfig.base.find((r) => r.id === 'amountMin').value, 9999, '新配置被解析进 state.filterConfig');
+  eq(st2.filterConfig.base.find((r) => r.id === 'turnoverMin').value, 9999, '新配置被解析进 state.filterConfig');
 
   // analyze 必须以「当前设置」为准，不能复用 state 里加载时的旧过滤配置
   const resTight = E.analyze({ ...st1, filterConfig: st1.filterConfig }, { settings: tight });
-  eq(resTight.filterConfig.base.find((r) => r.id === 'amountMin').value, 9999,
+  eq(resTight.filterConfig.base.find((r) => r.id === 'turnoverMin').value, 9999,
     'analyze 用设置里的过滤配置，不复用 state 的旧配置');
   eq(resTight.plan.items.length, 0, '过滤条件收紧后，今日买入计划不再推荐旧池子的票');
 
@@ -1035,8 +1056,8 @@ async function testStrategy() {
     { code: 'D5', mainRank: 3, amount: 1e8, turnover: 5, mktCap: 100e8 },
   ];
   const s1out = S.applyStage1(s1in, 'dragon').map((r) => r.code);
-  ok(s1out.includes('D1') && s1out.includes('D2'), '龙头战法：主线排名 ≤ 10 保留');
-  ok(!s1out.includes('D3') && !s1out.includes('D4'), '龙头战法：主线排名 > 10 剔除');
+  ok(['D1', 'D2', 'D3', 'D4'].every((code) => s1out.includes(code)),
+    '龙头战法：不再额外限制主线排名');
   ok(!s1out.includes('D5'), '龙头战法：成交额不足 2 亿剔除');
 
   /* ---------- stage2：因子门槛 ---------- */
@@ -1062,6 +1083,10 @@ async function testStrategy() {
   const rB = S.relaxStage2([], [{ code: 'only' }], s1in, stB);
   eq(rB.relaxed, 'stage1', 'stage1 仍不足 → 放宽到主线全集');
   eq(rB.rows.length, s1in.length, '最终回退到主线全集');
+
+  const lowAmountFallback = S.relaxStage2([], [], [{ code: 'low-amount', amount: 5e7 }], null);
+  ok(lowAmountFallback.rows.some((row) => row.code === 'low-amount'),
+    '移除基础成交额底线后，策略回退可纳入低于 1 亿的股票');
 
   const stC = new FS();
   const rC = S.relaxStage2(s2in, s2in, s1in, stC);
@@ -1387,6 +1412,38 @@ async function testApiOffline() {
   eq(parsed.vol[0], 12345, '成交量解析正确');
   eq(parsed.amt[0], 13000000, '成交额解析正确');
   ok(parsed.close instanceof Float64Array, 'close 为 Float64Array（省内存）');
+  const parsedMinute = A.parseKlines([
+    '2026-11-13 09:31,10.00,10.08,10.10,9.98,1234,124000.00',
+    '2026-11-13 09:32,10.08,10.05,10.09,10.02,1567,157000.00',
+  ]);
+  eq(parsedMinute.n, 2, '分钟 K 线可复用列式解析器');
+  eq(parsedMinute.dates[1], '2026-11-13 09:32', '分钟 K 线保留时间戳');
+  const C = await import(url('charts.js'));
+  let chartCalls = 0;
+  const chartCanvas = {
+    style: {},
+    parentElement: { clientWidth: 320 },
+    getContext: () => ({
+      setTransform: () => {},
+      clearRect: () => {},
+      beginPath: () => { chartCalls++; },
+      moveTo: () => {},
+      lineTo: () => {},
+      stroke: () => {},
+      setLineDash: () => {},
+      fillText: () => {},
+      fillRect: () => {},
+    }),
+  };
+  const originalWindow = globalThis.window;
+  globalThis.window = { devicePixelRatio: 1 };
+  try {
+    C.drawMinuteLine(chartCanvas, parsedMinute, { prevClose: 10.02 });
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  }
+  ok(chartCanvas.width > 0 && chartCalls > 0, '分钟走势图绘制价格曲线与参考线');
 
   // ymd
   const y = A.ymd(new Date(2026, 9, 26));
@@ -1422,6 +1479,23 @@ async function testApiOffline() {
   }
   ok(pageError instanceof A.ApiError, '分页失败时不返回不完整列表');
   ok(pageError && pageError.message.includes('第 2 页'), '分页失败错误指出失败页码');
+
+  const minuteFetch = globalThis.fetch;
+  let minuteUrl = '';
+  globalThis.fetch = async (input) => {
+    minuteUrl = String(input);
+    return new Response(JSON.stringify({
+      data: { klines: ['2026-11-13 09:31,10.00,10.08,10.10,9.98,1234,124000.00'] },
+    }), { status: 200 });
+  };
+  try {
+    const minute = await A.fetchMinuteKline('600000', { retry: 0 });
+    eq(minute.n, 1, 'fetchMinuteKline 返回分钟序列');
+    ok(new URL(minuteUrl).searchParams.get('klt') === '1', '分时接口请求 1 分钟周期');
+    ok(new URL(minuteUrl).searchParams.get('secid') === '1.600000', '分时接口正确映射沪市代码');
+  } finally {
+    globalThis.fetch = minuteFetch;
+  }
 
   globalThis.fetch = async () => new Response(JSON.stringify({
     data: { total: 2, diff: [{ f12: '1' }] },

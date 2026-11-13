@@ -154,6 +154,100 @@ export function drawKline(canvas, kl, opt = {}) {
   ctx.fillText('MA20', padL + 34, padT + 6);
 }
 
+/** 1 分钟 K 线收盘价走势与成交量 */
+export function drawMinuteLine(canvas, kl, opt = {}) {
+  if (!canvas || !kl || !kl.n) return;
+  const bars = Math.min(opt.bars || 240, kl.n);
+  const cssW = canvas.parentElement ? canvas.parentElement.clientWidth : 340;
+  const cssH = opt.height || 190;
+  const ctx = setupCanvas(canvas, cssW, cssH);
+  const padL = 8;
+  const padR = 48;
+  const padT = 12;
+  const padB = 20;
+  const volH = Math.round(cssH * 0.2);
+  const priceH = cssH - padT - padB - volH;
+  const start = kl.n - bars;
+  const values = [];
+  let maxVol = 0;
+  for (let i = start; i < kl.n; i++) {
+    if (isFinite(kl.close[i])) values.push(kl.close[i]);
+    if (isFinite(kl.vol[i])) maxVol = Math.max(maxVol, kl.vol[i]);
+  }
+  if (!values.length) return;
+  let lo = Math.min(...values);
+  let hi = Math.max(...values);
+  const prevClose = isFinite(opt.prevClose) ? opt.prevClose : values[0];
+  lo = Math.min(lo, prevClose);
+  hi = Math.max(hi, prevClose);
+  const range = hi - lo || Math.max(Math.abs(hi) * 0.002, 0.01);
+  lo -= range * 0.12;
+  hi += range * 0.12;
+
+  const plotW = cssW - padL - padR;
+  const xOf = (i) => padL + (i / Math.max(1, bars - 1)) * plotW;
+  const yOf = (price) => padT + ((hi - price) / (hi - lo)) * priceH;
+
+  ctx.font = '10px -apple-system, system-ui, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  for (let g = 0; g <= 3; g++) {
+    const price = hi - ((hi - lo) * g) / 3;
+    const y = yOf(price);
+    ctx.strokeStyle = CSS.grid;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(padL, y + 0.5);
+    ctx.lineTo(cssW - padR, y + 0.5);
+    ctx.stroke();
+    ctx.fillStyle = CSS.text;
+    ctx.fillText(price.toFixed(2), cssW - padR + 4, y);
+  }
+
+  if (prevClose >= lo && prevClose <= hi) {
+    ctx.strokeStyle = 'rgba(148,163,184,0.65)';
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(padL, yOf(prevClose));
+    ctx.lineTo(cssW - padR, yOf(prevClose));
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  const volumeTop = cssH - padB - volH;
+  if (maxVol > 0) {
+    for (let i = 0; i < bars; i++) {
+      const idx = start + i;
+      const volume = isFinite(kl.vol[idx]) ? kl.vol[idx] : 0;
+      const height = (volume / maxVol) * (volH - 3);
+      ctx.fillStyle = kl.close[idx] >= prevClose
+        ? 'rgba(239,68,68,0.55)' : 'rgba(34,197,94,0.55)';
+      ctx.fillRect(xOf(i) - 1, volumeTop + volH - height, 2, height);
+    }
+  }
+
+  ctx.strokeStyle = values[values.length - 1] >= prevClose ? CSS.up : CSS.down;
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  let started = false;
+  for (let i = 0; i < bars; i++) {
+    const price = kl.close[start + i];
+    if (!isFinite(price)) continue;
+    const x = xOf(i);
+    const y = yOf(price);
+    if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  ctx.font = '9px -apple-system, system-ui, sans-serif';
+  ctx.fillStyle = CSS.text;
+  ctx.textBaseline = 'top';
+  ctx.textAlign = 'left';
+  ctx.fillText(String(kl.dates[start] || '').slice(-5), padL, cssH - padB + 5);
+  ctx.textAlign = 'right';
+  ctx.fillText(String(kl.dates[kl.n - 1] || '').slice(-5), cssW - padR, cssH - padB + 5);
+}
+
 /**
  * 主线得分横向条形图
  * @param {HTMLCanvasElement} canvas

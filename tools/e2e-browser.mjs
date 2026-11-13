@@ -685,6 +685,26 @@ async function main() {
       if (sheet.maskVisible) {
         await page.screenshot({ path: path.join(OUT, 'sheet-detail.png') });
 
+        const chartTabs = await page.evaluate(() => ({
+          labels: [...document.querySelectorAll('#sheetContent .chart-tab')]
+            .map((b) => (b.textContent || '').trim()),
+          dailyVisible: !!document.querySelector('#sheetContent .daily-chart'),
+          minutePanel: !!document.querySelector('#sheetContent .minute-chart'),
+        }));
+        ok('详情提供日K与分时切换', chartTabs.labels.includes('日K')
+          && chartTabs.labels.includes('分时') && chartTabs.dailyVisible && chartTabs.minutePanel,
+        JSON.stringify(chartTabs));
+        const minuteSelected = await page.evaluate(() => {
+          const button = [...document.querySelectorAll('#sheetContent .chart-tab')]
+            .find((b) => (b.textContent || '').trim() === '分时');
+          if (!button) return false;
+          button.click();
+          return button.getAttribute('aria-selected') === 'true'
+            && getComputedStyle(document.querySelector('#sheetContent .minute-chart')
+              .closest('.stock-chart-panel')).display !== 'none';
+        });
+        ok('分时切换后分钟图表面板可见', minuteSelected);
+
         // 弹层必须自带「返回」按钮：iPhone 主屏模式没有浏览器返回键，
         // 只能靠这个按钮退出弹层（见 ui.js openSheet 的说明）。
         const back = await page.evaluate(() => {

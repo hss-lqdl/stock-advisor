@@ -646,6 +646,23 @@ body { min-height: 100vh; min-height: 100dvh; }
 
 .chart-box { margin-top: 12px; border-radius: var(--radius-s); overflow: hidden; background: var(--bg-2); }
 .chart-box canvas { display: block; width: 100%; }
+.chart-tabs {
+  display: flex; gap: 6px; margin-top: 14px; padding: 3px;
+  background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px;
+}
+.chart-tab {
+  flex: 1; min-height: 34px; border: 0; border-radius: 7px;
+  background: transparent; color: var(--txt-2); font: inherit; font-size: 13px;
+  font-weight: 700; cursor: pointer;
+}
+.chart-tab.active { background: var(--bg-3); color: var(--txt); }
+.chart-caption {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; margin-top: 10px; color: var(--txt-2); font-size: 11.5px;
+}
+.chart-caption .btn { flex: 0 0 auto; }
+.chart-status { margin-top: 7px; color: var(--txt-3); font-size: 11px; }
+.stock-chart-panel .chart-box { margin-top: 7px; }
 
 .factor-list { margin-top: 12px; display: grid; gap: 8px; }
 .factor-row { display: grid; grid-template-columns: 62px 1fr 32px; align-items: center; gap: 9px; }

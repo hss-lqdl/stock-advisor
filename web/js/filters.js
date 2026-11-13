@@ -8,7 +8,7 @@
      · 给任意策略追加自定义条件（字段 + 运算符 + 阈值）
    规则（可 JSON 序列化，存在 settings.filterConfig 里）：
      {
-       id: 'amountMin',          // 稳定 id（默认规则固定，自定义规则自动生成）
+       id: 'turnoverMin',        // 稳定 id（默认规则固定，自定义规则自动生成）
        on: true,                 // 是否启用
        kind: 'special' | 'field',
        special: 'st',            // kind==='special' 时用，见 SPECIAL_RULES
@@ -217,7 +217,6 @@ export const BASE_RULE_DEFAULTS = [
   { id: 'st', on: true, kind: 'special', special: 'st' },
   { id: 'priceMin', on: true, kind: 'field', field: 'price', op: '>', value: 2, strict: true },
   { id: 'marketCap', on: true, kind: 'field', field: 'mktCap', op: 'between', value: 20, value2: 800 },
-  { id: 'amountMin', on: true, kind: 'field', field: 'amount', op: '>=', value: 1 },
   { id: 'turnoverMin', on: true, kind: 'field', field: 'turnover', op: '>=', value: 0.5 },
   { id: 'limitUp', on: true, kind: 'special', special: 'limitUp' },
   { id: 'limitDown', on: true, kind: 'special', special: 'limitDown' },
@@ -255,7 +254,6 @@ export const STAGE_RULE_DEFAULTS = {
       { id: 'm1_turnover', on: true, kind: 'field', field: 'turnover', op: '>=', value: 2 },
       { id: 'm1_volRatio', on: true, kind: 'field', field: 'volRatio', op: '>=', value: 1.0, note: '（放量）' },
       { id: 'm1_chgPct', on: true, kind: 'field', field: 'chgPct', op: '>', value: 0 },
-      { id: 'm1_mktCap', on: true, kind: 'field', field: 'mktCap', op: '<=', value: 800 },
     ],
     stage2: [
       { id: 'm2_maAlign', on: true, kind: 'field', field: 'maAlign', op: '>=', value: 3, strict: true },
@@ -280,10 +278,8 @@ export const STAGE_RULE_DEFAULTS = {
   },
   dragon: {
     stage1: [
-      { id: 'd1_mainRank', on: true, kind: 'field', field: 'mainRank', op: '<=', value: 10 },
       { id: 'd1_amount', on: true, kind: 'field', field: 'amount', op: '>=', value: 2 },
       { id: 'd1_turnover', on: true, kind: 'field', field: 'turnover', op: '>=', value: 2 },
-      { id: 'd1_mktCap', on: true, kind: 'field', field: 'mktCap', op: '<=', value: 800 },
     ],
     stage2: [
       { id: 'd2_leader', on: true, kind: 'field', field: 'leader', op: '>=', value: 60 },
@@ -505,6 +501,12 @@ export function mergeList(defaults, saved) {
   return out;
 }
 
+function omitRetiredRules(rules, retiredIds) {
+  if (!Array.isArray(rules)) return rules;
+  const retired = new Set(retiredIds);
+  return rules.filter((rule) => !rule || !retired.has(rule.id));
+}
+
 let _seq = 0;
 /** 生成一个自定义规则 id（同一会话内不重复即可，跨会话靠时间戳） */
 export function newRuleId(prefix = 'c') {
@@ -558,9 +560,10 @@ export function serializeConfig(cfg) {
  */
 export function resolveFilterConfig(saved, legacy = {}) {
   const savedOk = saved && typeof saved === 'object';
+  const savedBase = savedOk ? omitRetiredRules(saved.base, ['amountMin']) : null;
   const cfg = {
     v: FILTER_CONFIG_VERSION,
-    base: savedOk ? mergeList(BASE_RULE_DEFAULTS, saved.base) : cloneList(BASE_RULE_DEFAULTS),
+    base: savedOk ? mergeList(BASE_RULE_DEFAULTS, savedBase) : cloneList(BASE_RULE_DEFAULTS),
     mainline: { ...MAINLINE_DEFAULTS, ...(savedOk && saved.mainline ? saved.mainline : null) },
     strategies: {},
   };
@@ -568,8 +571,13 @@ export function resolveFilterConfig(saved, legacy = {}) {
   for (const key of Object.keys(STAGE_RULE_DEFAULTS)) {
     const def = STAGE_RULE_DEFAULTS[key];
     const sv = savedOk && saved.strategies ? saved.strategies[key] : null;
+    const savedStage1 = sv
+      ? omitRetiredRules(sv.stage1, key === 'momentum'
+        ? ['m1_mktCap']
+        : key === 'dragon' ? ['d1_mainRank', 'd1_mktCap'] : [])
+      : null;
     cfg.strategies[key] = {
-      stage1: sv ? mergeList(def.stage1, sv.stage1) : cloneList(def.stage1),
+      stage1: sv ? mergeList(def.stage1, savedStage1) : cloneList(def.stage1),
       stage2: sv ? mergeList(def.stage2, sv.stage2) : cloneList(def.stage2),
     };
   }

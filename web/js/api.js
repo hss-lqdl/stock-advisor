@@ -553,6 +553,20 @@ export async function fetchKline(code, lmt = 120, opt = {}) {
   return parseKlines(d.klines);
 }
 
+/** 拉取最近交易日的 1 分钟 K 线，用于股票详情里的盘中分时图。 */
+export async function fetchMinuteKline(code, opt = {}) {
+  const secid = secidOf(code);
+  const url =
+    `${HOST_HIS}/api/qt/stock/kline/get?secid=${secid}&klt=1&fqt=1` +
+    `&lmt=240&end=20500101&fields1=f1,f2&fields2=${F_KLINE}`;
+  const j = await getJSON(url, { timeout: opt.timeout || 8000, retry: opt.retry ?? 1 });
+  const d = j && j.data;
+  if (!d || !Array.isArray(d.klines) || !d.klines.length) {
+    throw new ApiError('无分钟 K 线数据', url);
+  }
+  return parseKlines(d.klines);
+}
+
 /**
  * 批量拉 K 线（并发池 + 多轮补拉）。
  *

@@ -168,8 +168,7 @@ export function stockMainline(stock, ml) {
   const inBottom = matched.some((b) => ml.bottomSet.has(b.name));
   const eff = ml.opt || { on: true, avoidBottom: true };
 
-  // 所属最强主线板块在全部有效板块中的排名（1 = 最强）。
-  // 龙头战法用它做「必须处在强主线」的硬门槛。
+  // 所属最强主线板块在全部有效板块中的排名（1 = 最强），供龙头关注度评分使用。
   const best = top3[0];
   const mainRank = best && ml.rankOf ? (ml.rankOf.get(best.name) || 9999) : 9999;
 
