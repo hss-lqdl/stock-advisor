@@ -14,7 +14,7 @@ import {
   $, el, toast, showProgress, hideProgress, openSheet, closeSheet,
   copyText, nowHHMMSS, fmtInt, fmtPctRaw, updown,
 } from './ui.js';
-import { drawKline, drawMinuteLine } from './charts.js';
+import { createStockCharts } from './stock-charts.js';
 import { FACTOR_LABELS, factorLabel, getStrategy } from './strategy.js';
 import { TAIL_WINDOW_TEXT } from './constants.js';
 import { renderToday } from './views/today.js';
@@ -491,112 +491,18 @@ async function openStock(code) {
     ]));
   }
 
-  // 日 K 与盘中分时
-  const chartTabs = el('div', { class: 'chart-tabs', role: 'tablist', 'aria-label': '走势周期' });
-  const dailyPanel = el('div', { class: 'stock-chart-panel', role: 'tabpanel' });
-  const minutePanel = el('div', {
-    class: 'stock-chart-panel',
-    role: 'tabpanel',
-    style: { display: 'none' },
+  const charts = createStockCharts({
+    dailyKline: kl,
+    prevClose: stock.prevClose,
+    loadMinute: () => fetchMinuteKline(codeStr),
+    canAutoRefresh: () => {
+      const now = new Date();
+      const phase = marketPhase(now);
+      return S.state && ['morning', 'afternoon', 'tail'].includes(phase)
+        && isTradingDate(S.state.indexKl, now);
+    },
   });
-  const dailyButton = el('button', {
-    class: 'chart-tab active',
-    type: 'button',
-    role: 'tab',
-    'aria-selected': 'true',
-    text: '日K',
-  });
-  const minuteButton = el('button', {
-    class: 'chart-tab',
-    type: 'button',
-    role: 'tab',
-    'aria-selected': 'false',
-    text: '分时',
-  });
-  let minuteKline = null;
-  const minuteCanvas = el('canvas', { class: 'minute-chart' });
-  const minuteStatus = el('div', {
-    class: 'chart-status',
-    role: 'status',
-    text: '正在获取最新分时…',
-  });
-  const drawMinute = () => {
-    if (!minuteKline || !minutePanel.isConnected) return;
-    try {
-      drawMinuteLine(minuteCanvas, minuteKline, {
-        bars: 240,
-        height: 190,
-        prevClose: stock.prevClose,
-      });
-    } catch (e) {
-      console.error('绘制分时图失败', e);
-    }
-  };
-  const selectChart = (period) => {
-    const minute = period === 'minute';
-    dailyPanel.style.display = minute ? 'none' : '';
-    minutePanel.style.display = minute ? '' : 'none';
-    dailyButton.classList.toggle('active', !minute);
-    minuteButton.classList.toggle('active', minute);
-    dailyButton.setAttribute('aria-selected', String(!minute));
-    minuteButton.setAttribute('aria-selected', String(minute));
-    if (minute) drawMinute();
-  };
-  dailyButton.addEventListener('click', () => selectChart('daily'));
-  minuteButton.addEventListener('click', () => selectChart('minute'));
-  chartTabs.append(dailyButton, minuteButton);
-
-  if (kl && kl.n) {
-    const dailyCanvas = el('canvas', { class: 'daily-chart' });
-    dailyPanel.append(
-      el('div', { class: 'chart-caption', text: '日 K 线 · MA5 / MA20' }),
-      el('div', { class: 'chart-box' }, [dailyCanvas]),
-    );
-    requestAnimationFrame(() => {
-      if (!dailyPanel.isConnected) return;
-      try { drawKline(dailyCanvas, kl, { bars: 90, height: 210 }); } catch (e) { console.error(e); }
-    });
-  } else {
-    dailyPanel.append(el('div', { class: 'chart-status', text: '暂无日 K 数据' }));
-  }
-
-  let minuteRefreshing = false;
-  const refreshMinute = el('button', {
-    class: 'btn btn-ghost btn-sm',
-    type: 'button',
-    text: '刷新分时',
-  });
-  const loadMinute = async () => {
-    if (minuteRefreshing || !minutePanel.isConnected) return;
-    minuteRefreshing = true;
-    refreshMinute.disabled = true;
-    minuteStatus.textContent = minuteKline ? '正在更新分时…' : '正在获取最新分时…';
-    try {
-      minuteKline = await fetchMinuteKline(codeStr);
-      if (!minutePanel.isConnected) return;
-      minuteStatus.textContent =
-        `更新于 ${new Date().toLocaleTimeString('zh-CN')} · 最新 ${minuteKline.dates[minuteKline.n - 1]}`;
-      if (minutePanel.style.display !== 'none') drawMinute();
-    } catch (e) {
-      if (minutePanel.isConnected) {
-        minuteStatus.textContent =
-          `分时加载失败：${e && e.message ? e.message : String(e)}，可点击「刷新分时」重试`;
-      }
-    } finally {
-      minuteRefreshing = false;
-      refreshMinute.disabled = false;
-    }
-  };
-  refreshMinute.addEventListener('click', loadMinute);
-  minutePanel.append(
-    el('div', { class: 'chart-caption' }, [
-      el('span', { text: '1 分钟走势 · 盘中约每分钟自动更新' }),
-      refreshMinute,
-    ]),
-    minuteStatus,
-    el('div', { class: 'chart-box' }, [minuteCanvas]),
-  );
-  node.append(chartTabs, dailyPanel, minutePanel);
+  node.append(charts.element);
 
   // 关键指标
   const kv = el('div', { class: 'det-kv' });
@@ -681,13 +587,12 @@ async function openStock(code) {
   }
 
   // 关闭
-  const minuteTimer = setInterval(loadMinute, 60000);
   node.append(el('div', { class: 'pick-actions mt14' }, [
     el('button', {
       class: 'btn btn-ghost btn-sm',
       text: '关闭',
       onclick: () => {
-        clearInterval(minuteTimer);
+        charts.dispose();
         closeSheet();
       },
     }),
@@ -695,9 +600,9 @@ async function openStock(code) {
 
   openSheet(node, {
     title: stock.name || codeStr,
-    onClose: () => clearInterval(minuteTimer),
+    onClose: () => charts.dispose(),
   });
-  loadMinute();
+  charts.refresh();
 }
 
 /* ---------------- 启动画面 ---------------- */

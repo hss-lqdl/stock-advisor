@@ -1398,6 +1398,51 @@ async function testApiOffline() {
   ok(A.F_BOARD.includes('f109'), '板块字段含 f109（5 日涨跌）');
   eq(A.FS_ALL, 'm:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23', '全市场 fs 范围正确');
 
+  const Store = await import(url('store.js') + '?openDB-retry-test');
+  const originalIndexedDB = globalThis.indexedDB;
+  let openAttempts = 0;
+  try {
+    globalThis.indexedDB = {
+      open: () => {
+        openAttempts++;
+        const req = {};
+        setTimeout(() => {
+          req.error = new Error('test open failure');
+          req.onerror();
+        }, 0);
+        return req;
+      },
+    };
+    let openError = null;
+    try { await Store.openDB(); } catch (e) { openError = e; }
+    ok(!!openError, 'IndexedDB 打开错误可见');
+
+    let closed = false;
+    const fakeDb = {
+      objectStoreNames: { contains: () => true },
+      close: () => { closed = true; },
+    };
+    globalThis.indexedDB = {
+      open: () => {
+        openAttempts++;
+        const req = {};
+        setTimeout(() => {
+          req.result = fakeDb;
+          req.onsuccess();
+        }, 0);
+        return req;
+      },
+    };
+    eq(await Store.openDB(), fakeDb, 'IndexedDB 首次失败后可重新打开');
+    fakeDb.onversionchange();
+    ok(closed, 'IndexedDB 版本变更时关闭旧连接');
+    await Store.openDB();
+    eq(openAttempts, 3, '版本变更后建立新的 IndexedDB 连接');
+  } finally {
+    if (originalIndexedDB === undefined) delete globalThis.indexedDB;
+    else globalThis.indexedDB = originalIndexedDB;
+  }
+
   // parseKlines：注意顺序是 开/收/高/低
   const parsed = A.parseKlines([
     '2026-10-24,10.00,10.50,10.80,9.90,12345,13000000.00',

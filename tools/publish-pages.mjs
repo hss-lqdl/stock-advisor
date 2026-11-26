@@ -207,6 +207,12 @@ async function main() {
 
   // -- 3. 推送源码到 main ----------------------------------------------------
   step(3, `推送源码到 ${SOURCE_BRANCH}`);
+  const branch = git(['rev-parse', '--abbrev-ref', 'HEAD']).out.trim();
+  info(`本地当前分支 ${branch} → 远程 ${SOURCE_BRANCH}`);
+  if (branch !== SOURCE_BRANCH) {
+    die(`必须在 ${SOURCE_BRANCH} 分支执行发布，当前分支为 ${branch}`);
+  }
+
   const remote = `https://github.com/${OWNER}/${REPO}.git`;
   const existingRemote = git(['remote', 'get-url', 'origin'], ROOT, { allowFail: true });
   if (existingRemote.code === 0) {
@@ -216,9 +222,7 @@ async function main() {
     git(['remote', 'add', 'origin', remote]);
     info('已添加 origin');
   }
-  const branch = git(['rev-parse', '--abbrev-ref', 'HEAD']).out.trim();
-  info(`本地当前分支 ${branch} → 远程 ${SOURCE_BRANCH}`);
-  git([...authArgs(), 'push', '--quiet', remote, `HEAD:refs/heads/${SOURCE_BRANCH}`, '--force']);
+  git([...authArgs(), 'push', '--quiet', remote, `HEAD:refs/heads/${SOURCE_BRANCH}`]);
   ok(`源码已推送（${git(['rev-list', '--count', 'HEAD']).out.trim()} 个提交）`);
 
   // -- 4. 构建并推送站点分支 --------------------------------------------------

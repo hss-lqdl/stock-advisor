@@ -612,6 +612,52 @@ async function main() {
   /* ---------- 交互：刷新按钮 ---------- */
   section('交互：刷新 / 详情弹层 / 尾盘条');
 
+  section('独立图表组件回归（不依赖推荐结果）');
+  const chartComponent = await page.evaluate(async () => {
+    const { createStockCharts } = await import('./js/stock-charts.js');
+    const kl = {
+      dates: ['2026-11-26 09:31', '2026-11-26 09:32'],
+      open: Float64Array.from([10, 10.02]),
+      close: Float64Array.from([10.02, 10.05]),
+      high: Float64Array.from([10.03, 10.06]),
+      low: Float64Array.from([9.99, 10.01]),
+      vol: Float64Array.from([1000, 1300]),
+      n: 2,
+    };
+    let allowed = false;
+    let requests = 0;
+    const charts = createStockCharts({
+      dailyKline: kl,
+      prevClose: 10,
+      loadMinute: async () => { requests++; return kl; },
+      canAutoRefresh: () => allowed,
+      refreshIntervalMs: 30,
+    });
+    document.body.append(charts.element);
+    await charts.refresh();
+    const tabs = [...charts.element.querySelectorAll('.chart-tab')];
+    tabs.find((b) => b.textContent.trim() === '分时').click();
+    const switched = tabs[1].getAttribute('aria-selected') === 'true'
+      && getComputedStyle(charts.element.querySelector('.minute-chart')
+        .closest('.stock-chart-panel')).display !== 'none';
+    const initialRequests = requests;
+    await new Promise((resolve) => setTimeout(resolve, 85));
+    const blockedWhenClosed = requests === initialRequests;
+    allowed = true;
+    await new Promise((resolve) => setTimeout(resolve, 85));
+    const refreshedWhenAllowed = requests > initialRequests;
+    charts.dispose();
+    const disposedAt = requests;
+    await new Promise((resolve) => setTimeout(resolve, 85));
+    const stoppedAfterDispose = requests === disposedAt;
+    charts.element.remove();
+    return { switched, blockedWhenClosed, refreshedWhenAllowed, stoppedAfterDispose };
+  });
+  ok('独立图表组件可切换到分时', chartComponent.switched, JSON.stringify(chartComponent));
+  ok('非交易时段不自动请求分钟数据', chartComponent.blockedWhenClosed);
+  ok('允许刷新时定时请求分钟数据', chartComponent.refreshedWhenAllowed);
+  ok('组件释放后停止分钟数据请求', chartComponent.stoppedAfterDispose);
+
   const btnState = await page.evaluate(() => {
     const b = document.getElementById('btnRefresh');
     if (!b) return null;

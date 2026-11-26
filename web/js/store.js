@@ -10,7 +10,9 @@ let dbPromise = null;
 
 export function openDB() {
   if (dbPromise) return dbPromise;
-  dbPromise = new Promise((resolve, reject) => {
+  let pending;
+  pending = new Promise((resolve, reject) => {
+    let failed = false;
     const req = indexedDB.open(DB_NAME, DB_VER);
     req.onupgradeneeded = (ev) => {
       const db = req.result;
@@ -25,11 +27,32 @@ export function openDB() {
         if (!db.objectStoreNames.contains('boardDaily')) db.createObjectStore('boardDaily', { keyPath: 'date' });
       }
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-    req.onblocked = () => reject(new Error('IndexedDB 被其他标签页占用，请关闭其他页面后重试'));
+    req.onsuccess = () => {
+      const db = req.result;
+      if (failed) {
+        db.close();
+        return;
+      }
+      db.onversionchange = () => {
+        db.close();
+        if (dbPromise === pending) dbPromise = null;
+      };
+      resolve(db);
+    };
+    req.onerror = () => {
+      failed = true;
+      reject(req.error);
+    };
+    req.onblocked = () => {
+      failed = true;
+      reject(new Error('IndexedDB 被其他标签页占用，请关闭其他页面后重试'));
+    };
   });
-  return dbPromise;
+  dbPromise = pending;
+  pending.catch(() => {
+    if (dbPromise === pending) dbPromise = null;
+  });
+  return pending;
 }
 
 function tx(store, mode = 'readonly') {

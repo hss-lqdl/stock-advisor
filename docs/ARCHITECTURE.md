@@ -61,14 +61,14 @@ boot()
      └─ engine.loadAll({settings, onProgress})
          ├─ api.fetchSnapshot()         56 分页并发，5400+ 只
          ├─ api.fetchBoards()           概念 516 + 行业 496
-         ├─ universe.buildUniverse()    ★ 基础过滤 11 道（可配置）→ pool
+         ├─ universe.buildUniverse()    ★ 基础过滤 10 道（可配置）→ pool
          ├─ mainline.analyzeMainline()  板块清洗 + 打分 → Top20/退潮10
          ├─ mainline.annotatePool()     给每只票挂主线得分 + mainRank
          ├─ api.fetchLimitPool()        涨停/跌停池
          └─ market.analyzeMarket()      四维打分 → 档位
      └─ engine.analyze(state)
          ├─ mainline.annotatePool()     主线门槛（Top20 且非退潮）
-         ├─ api.fetchKlines()           四策略配额抽样日 K（并发池）
+         ├─ api.fetchKlines()           五策略配额抽样日 K（并发池）
          ├─ strategy.applyStage1()      策略专属门槛 · 快照初筛
          ├─ indicators.computeFactors() 8 个因子
          ├─ strategy.computeLeader()    全市场关注度 / 活跃度 / 龙头度
@@ -127,13 +127,14 @@ boot()
 | `momentum` | 趋势动量 | `rsi`, `atrp` | 均线全多头 + 动量突破 |
 | `reversal` | 超跌反弹 | `dd`, `rsi`, `atrp` | 深度回撤 + 超卖反抽 |
 | `dragon` | 龙头战法 | `atrp` | 全市场评估；**关注度 (20%)** + **活跃度 (20%)**，并以全市场龙头度 ≥ 60 为门槛 |
+| `limitup` | 涨停板战法 | `atrp` | 活跃度、封板强度、异动时机与连板高度 |
 
 反向因子在 `crossSectionNormalize(rows, keys, reverseKeys)` 里取 `100 - pct`：
 即数值越低分越高（如 RSI 低 = 超卖 = 好）。注意 `dragon` 策略的 `rsi` 不做反向处理（龙头追强势）。
 
 ### 4.2.1 股票池三段式过滤体系
 每种选股策略拥有专属的过滤链与明细展示：
-1. **基础过滤（共用 11 道，可配置）**：停牌 → ST/退市 → 低价 ≤2 元 → 市值不在 [min,max] → 成交额 <1 亿 → 换手率 <0.5% → 涨停/一字板 → 跌停 → 创业板（可关） → 一手成本超预算。
+1. **基础过滤（共用 10 道，可配置）**：停牌 → ST/退市 → 低价 ≤2 元 → 市值不在 [min,max] → 换手率 <0.5% → 涨停/一字板 → 跌停 → 创业板（可关） → 一手成本超预算 → 非沪深标的。成交额由策略门槛控制。
 2. **主线门槛（共用）**：所属板块入围近一周主线 Top20 且非退潮 Top10。
 3. **策略专属门槛（`strategy.js` `STRATEGY_FILTERS`）**：
    - Stage 1（快照初筛）：按策略特质过滤成交额、换手、量比、市值及主线排名；
@@ -145,7 +146,7 @@ boot()
 ```js
 {
   capital: 50000,          // 本金
-  strategy: 'balanced',    // balanced | momentum | reversal | dragon
+  strategy: 'balanced',    // balanced | momentum | reversal | dragon | limitup
   maxMarketCap: 800,       // 亿元（总市值口径 f20）
   minMarketCap: 20,        // 亿元
   maxPicks: 5,
@@ -158,8 +159,9 @@ boot()
 
 ### 4.4 股票池 10 道过滤（`universe.js` `buildUniverse`）
 
-依次为：停牌 → ST/退市 → 价格 ≤2 元 → 市值不在 [min,max] → 成交额 <1 亿 →
-换手率 <0.5% → 涨停/一字板 → 跌停 → **创业板（300/301，可关）** → 一手成本超预算。
+依次为：停牌 → ST/退市 → 价格 ≤2 元 → 市值不在 [min,max] →
+换手率 <0.5% → 涨停/一字板 → 跌停 → **创业板（300/301，可关）** →
+一手成本超预算 → 仅保留沪深 A 股。成交额由策略专属门槛控制。
 每道都通过 `stats.add(label, before, after)` 记账，设置页与自测都依赖这份 `steps`。
 
 ### 4.5 视图契约
@@ -204,13 +206,13 @@ boot()
 
 三层，全部不需要人工点界面：
 
-1. **离线单元**（`node tools/selftest.mjs`，730 项）：纯函数断言，覆盖 11 道基础过滤、
+1. **离线单元**（`node tools/selftest.mjs`）：断言数量以运行结果为准，覆盖基础过滤、
    五套策略专属门槛（Stage1/Stage2）与保底放宽、主线打分、四维打分、13 个因子、分位标准化、
    委托价/股数/止损止盈/费用、条件单文本、K 线解析、过滤条件阈值上下限。
-2. **联网全链路**（`--live`，730~760 项）：真实拉东财数据跑完整链路，打印当日推荐供人工核对。
+2. **联网全链路**（`--live`）：真实拉东财数据跑完整链路，打印当日推荐供人工核对。
    **上游限流时会主动跳过依赖它的断言并说明原因**，这是刻意设计，不是掩盖失败。
-3. **真浏览器 E2E**（`tools/e2e-browser.mjs --live`，66 项）：iPhone 14 Pro 视口，5 个 Tab 渲染、
-   manifest/图标/SW/IndexedDB、五策略选项与过滤明细分组、详情弹层、无横向溢出、深色主题、无页面异常。
+3. **真浏览器 E2E**（`tools/e2e-browser.mjs --live`）：iPhone 14 Pro 视口，5 个 Tab 渲染、
+   manifest/图标/SW/IndexedDB、五策略选项与过滤明细分组、图表组件切换与定时刷新、无横向溢出、深色主题、无页面异常。
    也可加 `--url https://hss-lqdl.github.io/stock-advisor/` 直接对线上站点跑。
 
 判定标准统一是**失败 0 项**，而不是"项数等于某个固定值"——项数会随上游可用性浮动。

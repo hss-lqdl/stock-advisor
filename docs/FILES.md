@@ -37,6 +37,7 @@ stock_advisor/
 │       ├── plan.js
 │       ├── backtest.js
 │       ├── charts.js
+│       ├── stock-charts.js  ← 个股详情日 K / 分时图表组件
 │       ├── engine.js
 │       ├── ui.js
 │       └── views/
@@ -82,13 +83,14 @@ stock_advisor/
 | `config.js` | 19 | 默认设置常量（独立于存储层与数据层，避免 universe.js → store.js 的反向依赖） | `DEFAULT_SETTINGS` `withDefaults` |
 | `constants.js` | 29 | 时间/文案常量：尾盘窗口、收盘与集合竞价时刻，替代各文件里的 `14:55` 硬编码 | `TAIL_START_H/M` `TAIL_END_H/M` `TAIL_START_MIN` `TAIL_END_MIN` `TAIL_HHMM` `CLOSE_HHMM` `CLOSE_AUCTION_HHMM` `TAIL_WINDOW_TEXT` |
 | `ui.js` | 292 | DOM 与格式化工具（无业务逻辑）。`openSheet` 会给每个弹层加一个 sticky 的「← 返回」按钮 | `$` `$$` `el` `esc` `fmtNum` `fmtPct` `fmtMoney` `fmtInt` `updown` `signCls` `toast` `openSheet` `closeSheet` `copyText` `skeletonCards` `emptyState` `errorBox` `showProgress` `hideProgress` `switchRow` `timeAgo` |
-| `charts.js` | 453 | Canvas 2D 手绘图表（零依赖） | `drawKline` `drawMainlineBars` `drawTrendLine` `drawDimBars` `drawSparkline` `drawEquityCurve` |
+| `charts.js` | 453 | Canvas 2D 手绘图表（零依赖） | `drawKline` `drawMinuteLine` `drawMainlineBars` `drawTrendLine` `drawDimBars` `drawSparkline` `drawEquityCurve` |
+| `stock-charts.js` | - | 个股详情日 K / 分时切换、分时刷新及组件释放 | `createStockCharts` |
 
 ### 4.2 计算层（纯函数，无 DOM、无网络）
 
 | 模块 | 行数 | 职责 | 主要导出 |
 |---|---|---|---|
-| `universe.js` | 画像 ~180 | 股票池基础过滤（11 道，规则来自 `filters.js`） | `buildUniverse(rows, cfg)` → `{pool, stats, budgetPerStock, filterConfig}`；`FilterStats` `cloneStats` `normalizeStock` `poolToMap` `limitPrices`；再导出 `filters.js` 的 `isST` `isSuspended` `limitPct` `marketOf` `ruleLabel` `isChiNext`（保持既有 import 路径可用） |
+| `universe.js` | 画像 ~180 | 股票池基础过滤（10 道，规则来自 `filters.js`） | `buildUniverse(rows, cfg)` → `{pool, stats, budgetPerStock, filterConfig}`；`FilterStats` `cloneStats` `normalizeStock` `poolToMap` `limitPrices`；再导出 `filters.js` 的 `isST` `isSuspended` `limitPct` `marketOf` `ruleLabel` `isChiNext`（保持既有 import 路径可用） |
 | `filters.js` | ~591 | **可配置过滤条件**：字段注册表 + 运算符表 + 特殊条件 + 规则求值 + 序列化/合并（零依赖，纯数据 + 纯函数） | `FILTER_FIELDS` `fieldsByGroup` `OPS` `opsForField` `SPECIAL_RULES` `BASE_RULE_DEFAULTS` `MAINLINE_DEFAULTS` `STAGE_RULE_DEFAULTS` `ruleLabel` `evalRule` `runRules` `cloneRule/cloneList/mergeList` `makeRule` `setRule` `upsertRule` `removeRule` `serializeConfig` `resolveFilterConfig` `countRules` `fieldRange` `clampFieldValue` `limitPct` `isST` `isSuspended` `marketOf` `isChiNext` `isLimitUp` `isLimitDown`；常量 `FILTER_CONFIG_VERSION` |
 | `mainline.js` | 224 | 近一周主线情绪（板块清洗 + 打分 + 个股归属），主线门槛可参数化 | `analyzeMainline(boards, opt)`（`opt` = `{topN, bottomN, avoidBottom, on}`）`cleanBoards` `boardScore` `stockMainline` `annotatePool` `mainlineTrend`；常量 `NOISE_PATTERN` `MIN_MEMBERS` `TOP_N` `BOTTOM_N` |
 | `market.js` | 235 | 大盘四维打分（趋势 30 / 广度 25 / 情绪 25 / 量能 20）→ 档位 | `analyzeMarket` `trendScore` `breadthScore` `sentimentScore` `volumeScore` `levelByScore` `budgetPerStock`；常量 `LEVELS` |
