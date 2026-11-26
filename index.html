@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>A股每日买入计划</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0f17">
+<meta name="color-scheme" content="dark">
+<meta name="format-detection" content="telephone=no">
+
+<!-- iOS 添加到主屏幕 -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="A股计划">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" type="image/svg+xml" href="icons/icon.svg">
+<link rel="icon" type="image/png" sizes="64x64" href="icons/favicon-64.png">
+
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="app">
+
+  <!-- 顶部状态条 -->
+  <header id="topbar">
+    <div class="tb-left">
+      <div id="marketBadge" class="badge badge-idle">
+        <span class="dot"></span><span id="marketBadgeText">初始化</span>
+      </div>
+      <div id="clockLine" class="clock">--:--:--</div>
+    </div>
+    <div class="tb-right">
+      <button id="btnRefresh" class="icon-btn" title="刷新数据" aria-label="刷新数据">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+          <path d="M21 12a9 9 0 1 1-2.64-6.36" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <path d="M21 3v6h-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- 全局进度条 -->
+  <div id="progressWrap" class="progress-wrap hidden">
+    <div id="progressBar" class="progress-bar"></div>
+    <div id="progressText" class="progress-text">准备中…</div>
+  </div>
+
+  <!-- 尾盘倒计时条 -->
+  <div id="tailBar" class="tail-bar hidden">
+    <div class="tail-left">
+      <span class="tail-tag">尾盘模式</span>
+      <span id="tailText" class="tail-text">--</span>
+    </div>
+    <button id="btnLock" class="mini-btn">立即锁定</button>
+  </div>
+
+  <main id="main">
+
+    <!-- ============ Tab 1 今日 ============ -->
+    <section class="tab-panel" id="tab-today" data-tab="today">
+      <div id="todayContent"></div>
+    </section>
+
+    <!-- ============ Tab 2 主线 ============ -->
+    <section class="tab-panel hidden" id="tab-mainline" data-tab="mainline">
+      <div id="mainlineContent"></div>
+    </section>
+
+    <!-- ============ Tab 3 推荐 ============ -->
+    <section class="tab-panel hidden" id="tab-picks" data-tab="picks">
+      <div id="picksContent"></div>
+    </section>
+
+    <!-- ============ Tab 4 持仓 ============ -->
+    <section class="tab-panel hidden" id="tab-positions" data-tab="positions">
+      <div id="positionsContent"></div>
+    </section>
+
+    <!-- ============ Tab 5 设置 ============ -->
+    <section class="tab-panel hidden" id="tab-settings" data-tab="settings">
+      <div id="settingsContent"></div>
+    </section>
+
+  </main>
+
+  <!-- 底部 TabBar -->
+  <nav id="tabbar">
+    <button class="tab-btn active" data-tab="today">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+        <path d="M3 13h4l3 7 4-16 3 9h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span>今日</span>
+    </button>
+    <button class="tab-btn" data-tab="mainline">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+        <path d="M4 20V10M10 20V4M16 20v-7M22 20V8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <span>主线</span>
+    </button>
+    <button class="tab-btn" data-tab="picks">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+        <path d="M12 3l2.6 5.6 6.1.8-4.5 4.2 1.1 6-5.3-3-5.3 3 1.1-6L3.3 9.4l6.1-.8z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+      </svg>
+      <span>推荐</span>
+    </button>
+    <button class="tab-btn" data-tab="positions">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+        <path d="M3 7h18v12H3z" fill="none" stroke="currentColor" stroke-width="2"/>
+        <path d="M3 11h18M8 7V4h8v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <span>持仓</span>
+    </button>
+    <button class="tab-btn" data-tab="settings">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+        <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/>
+        <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" fill="none" stroke="currentColor" stroke-width="1.6"/>
+      </svg>
+      <span>设置</span>
+    </button>
+  </nav>
+
+  <!-- 全屏 Loading -->
+  <div id="bootScreen" class="boot">
+    <div class="boot-logo">
+      <img src="icons/icon-180.png" alt="" width="72" height="72">
+    </div>
+    <div class="boot-title">A股每日买入计划</div>
+    <div class="boot-sub" id="bootSub">正在加载…</div>
+    <div class="boot-bar"><div id="bootBar"></div></div>
+    <div class="boot-hint" id="bootHint"></div>
+  </div>
+
+  <!-- 轻提示 -->
+  <div id="toast" class="toast hidden"></div>
+
+  <!-- 底部弹层（详情/确认） -->
+  <div id="sheetMask" class="sheet-mask hidden">
+    <div id="sheet" class="sheet">
+      <div class="sheet-handle"></div>
+      <div id="sheetContent" class="sheet-content"></div>
+    </div>
+  </div>
+
+</div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

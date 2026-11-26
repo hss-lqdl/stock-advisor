@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+<rect width="100" height="100" rx="22" fill="#101622"/>
+<g stroke="#1e293b" stroke-width="1">
+<path d="M0 12.5H100M0 25H100M0 37.5H100M0 50H100M0 62.5H100M0 75H100M0 87.5H100"/>
+<path d="M12.5 0V100M25 0V100M37.5 0V100M50 0V100M62.5 0V100M75 0V100M87.5 0V100"/>
+</g>
+<g stroke-width="2">
+<line x1="26" y1="52" x2="26" y2="82" stroke="#f87171"/>
+<line x1="50" y1="40" x2="50" y2="78" stroke="#60a5fa"/>
+<line x1="74" y1="24" x2="74" y2="70" stroke="#34d399"/>
+</g>
+<rect x="21" y="60" width="10" height="22" fill="#f87171"/>
+<rect x="45" y="46" width="10" height="32" fill="#60a5fa"/>
+<rect x="69" y="30" width="10" height="40" fill="#34d399"/>
+<polyline points="18,44 34,32 50,34 66,20 82,14" fill="none" stroke="#34d399" stroke-width="3.2" stroke-linecap="round"/>
+<circle cx="82" cy="14" r="5" fill="#34d399"/>
+</svg>
